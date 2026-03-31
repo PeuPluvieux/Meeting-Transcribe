@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meeting Notes AI</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<!-- Browser compatibility warning -->
+<div id="browserWarning" class="browser-warning" style="display:none;">
+    <span>⚠️ Web Speech API requires <strong>Chrome or Edge</strong>. Firefox and Safari do not support continuous transcription.</span>
+    <button onclick="document.getElementById('browserWarning').style.display='none'">✕</button>
+</div>
+
+<!-- First-visit setup banner -->
+<div id="setupBanner" class="browser-warning" style="display:none;background:var(--primary);color:#fff;border-color:var(--primary);">
+    <span>👋 Welcome! Paste your free <strong>Groq API key</strong> in Settings to get started — get one at <strong>console.groq.com</strong> (no credit card needed).</span>
+    <button onclick="document.getElementById('setupBanner').style.display='none'" style="color:#fff;opacity:0.8;">✕</button>
+</div>
+
+    <!-- ========== FLOATING SUBTITLE OVERLAY ========== -->
+    <div class="floating-overlay" id="floatingOverlay" style="display:none;">
+        <div class="overlay-drag-handle" id="overlayDragHandle">
+            <div class="overlay-title-row">
+                <span class="overlay-rec-dot" id="overlayRecDot"></span>
+                <span class="overlay-title">Live Captions</span>
+            </div>
+            <div class="overlay-ctrl-btns">
+                <button class="overlay-btn" title="Cycle opacity" onclick="cycleOverlayOpacity()">◑</button>
+                <button class="overlay-btn" title="Cycle font size" onclick="cycleOverlayFontSize()">A+</button>
+                <button class="overlay-btn" onclick="closeFloatingOverlay()" title="Close">✕</button>
+            </div>
+        </div>
+        <div class="overlay-captions" id="overlayCaptions">
+            <p class="overlay-placeholder">Captions appear here when recording…</p>
+        </div>
+    </div>
+
+    <!-- ========== SIDEBAR OVERLAY ========== -->
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeHistorySidebar()"></div>
+
+    <!-- ========== HISTORY SIDEBAR ========== -->
+    <div class="history-sidebar" id="historySidebar">
+        <div class="sidebar-header">
+            <h3>Meeting History</h3>
+            <button class="sidebar-close" onclick="closeHistorySidebar()">✕</button>
+        </div>
+        <div class="sidebar-search">
+            <input type="text" id="historySearch" placeholder="Search meetings…" oninput="filterMeetingHistory()">
+        </div>
+        <div class="sidebar-content" id="historyList">
+            <div class="history-empty">
+                <p>No meetings saved yet.</p>
+                <p class="history-empty-hint">Record a meeting and it will appear here.</p>
+            </div>
+        </div>
+        <div class="sidebar-footer">
+            <button class="btn btn-small btn-secondary" onclick="exportAllMeetings()">Export JSON</button>
+            <button class="btn btn-small btn-secondary" onclick="exportAllMeetingsCSV()">Export CSV</button>
+            <button class="btn btn-small btn-secondary" onclick="document.getElementById('importMeetingsInput').click()">Import</button>
+            <input type="file" id="importMeetingsInput" accept=".json" style="display:none;" onchange="importMeetingsFromFile(event)">
+        </div>
+    </div>
+
+    <!-- ========== MAIN CONTAINER ========== -->
+    <div class="container">
+
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <span class="header-logo-icon">🎙️</span>
+                <span class="header-title">Meeting Notes AI</span>
+            </div>
+            <div class="header-right">
+                <button class="btn btn-ghost header-btn header-btn-icon" onclick="toggleHistorySidebar()" title="Meeting history">📁</button>
+                <button class="btn btn-ghost header-btn header-btn-icon" id="overlayToggleBtn" onclick="toggleFloatingOverlay()" title="Floating captions">📺</button>
+                <button class="btn btn-ghost header-btn header-btn-icon" id="pipToggleBtn" onclick="openDocumentPiP()" title="Pop-out overlay (always on top)">⧉</button>
+                <button class="btn btn-ghost header-btn header-btn-icon dark-toggle-btn" onclick="toggleDarkMode()" id="darkToggleBtn" title="Toggle dark mode">🌙</button>
+                <button class="btn btn-ghost header-btn header-btn-icon" onclick="toggleSettings()" title="Settings">⚙️</button>
+            </div>
+        </header>
+
+        <!-- Meeting Title -->
+        <div class="meeting-title-section">
+            <input type="text" id="meetingTitle" class="meeting-title-input" placeholder="Untitled Meeting" oninput="saveMeetingTitle()">
+        </div>
+
+        <!-- Recording Section -->
+        <div class="recording-section">
+            <div class="status-row">
+                <div class="status-indicator" id="statusIndicator">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span class="status-text" id="statusText">Ready to record</span>
+                </div>
+                <div class="mode-badges" id="modeBadges">
+                    <span class="mode-badge mode-badge-blue" id="micBadge" style="display:none;">🎙️ Mic Active</span>
+                    <span class="mode-badge mode-badge-purple" id="systemAudioBadge" style="display:none;">🖥️ Meeting Audio</span>
+                </div>
+            </div>
+
+            <div class="timer" id="timer">00:00:00</div>
+
+            <div class="controls">
+                <button class="btn btn-record" id="recordBtn" onclick="handleRecordButton()">
+                    <span class="btn-icon" id="recordBtnIcon">⏺</span>
+                    <span class="btn-text" id="recordBtnText">Start Recording</span>
+                </button>
+                <button class="btn btn-stop" id="stopBtn" onclick="stopRecording()" disabled>
+                    <span class="btn-icon">⏹</span>
+                    <span class="btn-text">Stop &amp; Process</span>
+                </button>
+                <button id="addMeetingAudioBtnMain" class="btn btn-secondary" onclick="handleAddMeetingAudio()" title="Capture Teams/Zoom/Google Meet audio">🖥️ Add Meeting Audio</button>
+            </div>
+
+            <div class="live-preview" id="livePreview">
+                <div class="live-preview-header">
+                    <h3>📝 Live Transcript</h3>
+                    <button class="btn btn-tiny btn-ghost" onclick="clearLiveTranscript()">Clear</button>
+                </div>
+                <div class="transcript-container" id="liveTranscript">
+                    <p class="placeholder">Transcript will appear here as you speak…</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Overlay (backdrop) -->
+        <div class="settings-overlay" id="settingsOverlay" onclick="toggleSettings()"></div>
+
+        <!-- Settings Panel (Drawer) -->
+        <div class="settings-panel" id="settingsPanel">
+            <div class="settings-header">
+                <span>⚙️ Settings</span>
+                <button class="btn-settings-close" onclick="toggleSettings()" title="Close">✕</button>
+                <span class="toggle-icon" id="toggleIcon" style="display:none;">▼</span>
+            </div>
+            <div class="settings-content" id="settingsContent">
+
+                <!-- Transcription -->
+                <div class="settings-section">
+                    <h4 class="settings-section-title">Transcription</h4>
+                    <div id="singleLanguageSettings">
+                        <div class="settings-row-2col">
+                            <div class="input-group">
+                                <label for="sourceLang">Speaking Language</label>
+                                <select id="sourceLang">
+                                    <option value="zh-TW+en-US">🇹🇼 Taiwanese + English (Mixed)</option>
+                                    <option value="zh-CN">Chinese (Mandarin)</option>
+                                    <option value="zh-TW">Chinese (Taiwan)</option>
+                                    <option value="en-US" selected>English (US)</option>
+                                    <option value="en-GB">English (UK)</option>
+                                    <option value="ja-JP">Japanese</option>
+                                    <option value="ko-KR">Korean</option>
+                                    <option value="tl-PH">Filipino</option>
+                                    <option value="es-ES">Spanish</option>
+                                    <option value="fr-FR">French</option>
+                                    <option value="de-DE">German</option>
+                                    <option value="ar-SA">Arabic</option>
+                                    <option value="pt-BR">Portuguese (BR)</option>
+                                    <option value="hi-IN">Hindi</option>
+                                </select>
+                            </div>
+                            <div class="input-group">
+                                <label for="targetLang">Translate To</label>
+                                <select id="targetLang">
+                                    <option value="en" selected>English</option>
+                                    <option value="zh">Chinese</option>
+                                    <option value="ja">Japanese</option>
+                                    <option value="ko">Korean</option>
+                                    <option value="tl">Filipino</option>
+                                    <option value="es">Spanish</option>
+                                    <option value="fr">French</option>
+                                    <option value="de">German</option>
+                                    <option value="ar">Arabic</option>
+                                    <option value="pt">Portuguese</option>
+                                    <option value="none">No Translation</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Web Speech API / Transcription Settings -->
+                <div class="settings-section">
+                    <div class="settings-section-label">Transcription</div>
+
+                    <div class="info-box info-box-webspeech">
+                        <div class="info-box-header">
+                            <span>🎙️ <strong>Web Speech API</strong></span>
+                            <div class="mic-status-row">
+                                <span class="mic-status-dot" id="micStatusDot"></span>
+                                <span id="micStatusText">Ready</span>
+                            </div>
+                        </div>
+                        <p class="settings-info-line">🎙️ Uses your system default microphone. To change, update your <strong>Windows Sound Settings</strong>.</p>
+                        <p style="margin-top:6px;font-size:0.8em;color:var(--text-muted);">Real-time transcription from your microphone. Works for physical meetings and your voice in online meetings.</p>
+                    </div>
+
+                    <div class="info-box info-box-meeting-audio" style="margin-top:8px;">
+                        <div class="info-box-header">
+                            <span>🖥️ <strong>Meeting Audio</strong> <span style="font-size:0.75em;opacity:0.7;">(Teams / Zoom / Google Meet)</span></span>
+                        </div>
+                        <p style="font-size:0.8em;color:var(--text-muted);margin:6px 0 10px;">Capture what meeting participants say. Use the <strong>🖥️ Add Meeting Audio</strong> button above while recording.</p>
+                        <div style="margin-top:4px;">
+                            <details>
+                                <summary style="font-size:0.8em;cursor:pointer;color:var(--text-muted);">Setup instructions</summary>
+                                <ol style="font-size:0.78em;color:var(--text-muted);margin-top:6px;padding-left:16px;line-height:1.8;">
+                                    <li>Get a free API key at <strong>console.groq.com</strong> (no credit card)</li>
+                                    <li>Paste your Groq key in AI Settings below</li>
+                                    <li>Start recording, then click "Add Meeting Audio"</li>
+                                    <li>Share your <strong>entire screen</strong> (check "Share system audio")</li>
+                                    <li>Meeting participant audio transcribed every 30 seconds</li>
+                                </ol>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="settings-divider">
+
+                <!-- Translation Engine (from LiveCaptions-Translator inspiration) -->
+                <div class="settings-section">
+                    <h4 class="settings-section-title">Translation Engine</h4>
+                    <div class="input-group">
+                        <label for="translationProvider">Provider</label>
+                        <select id="translationProvider" onchange="onTranslationProviderChange()">
+                            <option value="google">Google Translate (Free, Fast)</option>
+                            <option value="ollama">Ollama LLM (Local, Better Context)</option>
+                        </select>
+                        <small id="translationProviderHint">Google is fast. Ollama handles incomplete sentences and context better.</small>
+                    </div>
+                    <div id="ollamaTranslationInfo" class="info-box" style="display:none;">
+                        <span class="info-icon">🤖</span>
+                        <div class="info-content"><strong>Ollama Translation</strong> — Uses your local LLM for context-aware translation. Requires Ollama to be running.</div>
+                    </div>
+                </div>
+
+                <hr class="settings-divider">
+
+                <!-- AI Summary -->
+                <div class="settings-section">
+                    <h4 class="settings-section-title">AI Summary</h4>
+                    <div class="input-group">
+                        <label for="llmProvider">Provider</label>
+                        <select id="llmProvider" onchange="onLLMProviderChange()">
+                            <option value="groq">Groq (Free API — Recommended)</option>
+                            <option value="anthropic">Anthropic Claude (Paid)</option>
+                            <option value="openai">OpenAI GPT (Paid)</option>
+                            <option value="gemini">Google Gemini (Free tier)</option>
+                            <option value="ollama">Ollama (Local, FREE)</option>
+                            <option value="none">None (Skip Summary)</option>
+                        </select>
+                    </div>
+                    <div id="ollamaSettings">
+                        <div class="input-group">
+                            <label for="ollamaModel">Model</label>
+                            <div class="model-select-row">
+                                <select id="ollamaModel"><option value="llama3.2">llama3.2 (Recommended)</option></select>
+                                <button class="btn btn-small btn-secondary" onclick="refreshOllamaModels()">Refresh</button>
+                            </div>
+                        </div>
+                        <div class="ollama-status">
+                            <span class="ollama-status-dot" id="ollamaStatusDot"></span>
+                            <span id="ollamaStatusText">Checking Ollama…</span>
+                            <button class="btn btn-small btn-secondary" onclick="checkOllamaConnection()">Test</button>
+                        </div>
+                    </div>
+                    <!-- Groq Settings -->
+                    <div id="groqSection" class="settings-subsection">
+                        <div class="input-group">
+                            <label for="groqApiKey">Groq API Key</label>
+                            <input type="password" id="groqApiKey" placeholder="gsk_..." style="width:100%;" onchange="saveSettings()">
+                            <p class="settings-hint">Free — get your key at <strong>console.groq.com</strong> (no credit card needed)</p>
+                        </div>
+                    </div>
+                    <!-- Anthropic Settings -->
+                    <div id="anthropicSettings" style="display:none;">
+                        <div class="input-group">
+                            <label for="anthropicKey">Anthropic API Key</label>
+                            <input type="password" id="anthropicKey" placeholder="sk-ant-..." style="width:100%;" onchange="saveSettings()">
+                            <p class="settings-hint">Get your key at <strong>console.anthropic.com</strong> — uses Claude Haiku (fast &amp; affordable)</p>
+                        </div>
+                    </div>
+                    <!-- OpenAI Settings -->
+                    <div id="openaiSettings" style="display:none;">
+                        <div class="input-group">
+                            <label for="openaiKey">OpenAI API Key</label>
+                            <input type="password" id="openaiKey" placeholder="sk-..." style="width:100%;" onchange="saveSettings()">
+                            <p class="settings-hint">Get your key at <strong>platform.openai.com</strong> — uses GPT-4o Mini</p>
+                        </div>
+                    </div>
+                    <!-- Gemini Settings -->
+                    <div id="geminiSettings" style="display:none;">
+                        <div class="input-group">
+                            <label for="geminiKey">Google Gemini API Key</label>
+                            <input type="password" id="geminiKey" placeholder="AIza..." style="width:100%;" onchange="saveSettings()">
+                            <p class="settings-hint">Free tier available — get your key at <strong>aistudio.google.com</strong></p>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="settings-divider">
+
+                <!-- Knowledge Base -->
+                <div class="settings-section">
+                    <h4 class="settings-section-title">Knowledge Learning</h4>
+                    <div class="kb-stats-row">
+                        <span id="kbStatsText">0 corrections learned</span>
+                        <button class="btn btn-small btn-secondary" onclick="openKnowledgeManager()">Manage</button>
+                    </div>
+                    <div class="input-group checkbox-group">
+                        <label><input type="checkbox" id="autoCorrectEnabled" checked> Enable auto-correction</label>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" onclick="saveSettings()" style="width:100%;margin-top:16px;">Save Settings</button>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div class="results-section" id="resultsSection" style="display:none;">
+            <h2>📋 Meeting Results</h2>
+
+            <div class="speakers-panel" id="speakersPanel">
+                <div class="speakers-header">
+                    <span>👤 Speakers</span>
+                    <button class="btn btn-small btn-secondary" onclick="addSpeaker()">+ Add</button>
+                </div>
+                <div class="speakers-list" id="speakersList">
+                    <p class="speakers-empty">No speakers assigned yet</p>
+                </div>
+            </div>
+
+            <div class="tabs">
+                <button class="tab active" onclick="showTab('transcript', this)">Transcript</button>
+                <button class="tab" onclick="showTab('summary', this)">Summary</button>
+                <button class="tab" onclick="showTab('actions', this)">Action Items</button>
+            </div>
+            <div class="tab-content" id="transcriptTab" style="display:block;">
+                <div class="content-header">
+                    <h3>Full Transcript</h3>
+                    <div class="content-actions">
+                        <span class="edit-hint">Double-click to edit</span>
+                        <button class="btn btn-small" onclick="copyToClipboard('transcript')">📋 Copy</button>
+                        <button class="btn btn-small" onclick="downloadFile('transcript')">⬇️ Download</button>
+                    </div>
+                </div>
+                <div class="content-body" id="transcriptContent"></div>
+            </div>
+            <div class="tab-content" id="summaryTab" style="display:none;">
+                <div class="content-header">
+                    <h3>Meeting Summary</h3>
+                    <div class="content-actions">
+                        <button class="btn btn-small" onclick="copyToClipboard('summary')">📋 Copy</button>
+                        <button class="btn btn-small" onclick="downloadFile('summary')">⬇️ Download</button>
+                    </div>
+                </div>
+                <div class="content-body" id="summaryContent"></div>
+            </div>
+            <div class="tab-content" id="actionsTab" style="display:none;">
+                <div class="content-header">
+                    <h3>Action Items</h3>
+                    <div class="content-actions">
+                        <button class="btn btn-small" onclick="copyToClipboard('actions')">📋 Copy</button>
+                        <button class="btn btn-small" onclick="downloadFile('actions')">⬇️ Download</button>
+                    </div>
+                </div>
+                <div class="content-body" id="actionsContent"></div>
+            </div>
+
+            <div class="download-all">
+                <button class="btn btn-primary" onclick="saveCurrentMeeting()">💾 Save Meeting</button>
+                <button class="btn btn-secondary" onclick="downloadAll()">⬇️ Download All</button>
+                <button class="btn btn-secondary" onclick="startNewMeeting()">🔄 New Meeting</button>
+            </div>
+        </div>
+
+        <!-- Processing Overlay -->
+        <div class="processing-overlay" id="processingOverlay" style="display:none;">
+            <div class="processing-content">
+                <div class="spinner"></div>
+                <h3 id="processingTitle">Processing meeting…</h3>
+                <p id="processingStatus">Please wait…</p>
+            </div>
+        </div>
+
+        <footer class="footer">
+            <p>Meeting Notes AI v7.0 &mdash; Powered by Web Speech API &amp; Groq AI</p>
+            <p>By: Patrick Parco</p>
+        </footer>
+    </div>
+
+    <!-- ========== MODALS ========== -->
+
+    <!-- Knowledge Base Manager -->
+    <div class="modal-overlay" id="kbManagerModal" style="display:none;">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>Knowledge Base Manager</h3>
+                <button class="modal-close" onclick="closeKnowledgeManager()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="kb-toolbar">
+                    <input type="text" id="kbSearchInput" placeholder="Search corrections…" oninput="filterKnowledgeBase()">
+                    <select id="kbCategoryFilter" onchange="filterKnowledgeBase()">
+                        <option value="all">All Categories</option>
+                        <option value="name">Names</option>
+                        <option value="company">Company</option>
+                        <option value="product">Product</option>
+                        <option value="technical">Technical</option>
+                        <option value="other">Other</option>
+                    </select>
+                    <button class="btn btn-small btn-primary" onclick="openAddCorrectionDialog()">+ Add</button>
+                </div>
+                <div class="kb-list" id="kbList"><p class="kb-empty">No corrections learned yet.</p></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="exportKnowledgeBase()">Export JSON</button>
+                <button class="btn btn-secondary" onclick="document.getElementById('kbImportInput').click()">Import JSON</button>
+                <input type="file" id="kbImportInput" accept=".json" style="display:none;" onchange="importKnowledgeBase(event)">
+                <button class="btn btn-primary" onclick="closeKnowledgeManager()">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Learn Correction Dialog -->
+    <div class="modal-overlay" id="learnDialog" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Learn New Correction</h3>
+                <button class="modal-close" onclick="closeLearnDialog()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label>Wrong Transcription</label>
+                    <input type="text" id="learnWrongText" placeholder="Text to correct">
+                </div>
+                <div class="input-group">
+                    <label>Correct Text</label>
+                    <input type="text" id="learnCorrectText" placeholder="The correct version">
+                </div>
+                <div class="settings-row-2col">
+                    <div class="input-group">
+                        <label>Category</label>
+                        <select id="learnCategory">
+                            <option value="name">Name</option>
+                            <option value="company">Company</option>
+                            <option value="product">Product</option>
+                            <option value="technical">Technical</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                    <div class="input-group">
+                        <label>&nbsp;</label>
+                        <div style="padding-top:6px;">
+                            <label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="learnCaseSensitive" checked> Case sensitive</label>
+                            <label style="display:flex;gap:6px;align-items:center;margin-top:4px;"><input type="checkbox" id="learnWholeWord" checked> Whole word only</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeLearnDialog()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveLearnedCorrection()">Save &amp; Learn</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

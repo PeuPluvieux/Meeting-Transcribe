@@ -1,0 +1,13 @@
+# API keys — never commit
+web-app/GroqAPI.txt
+
+# Internal dev files
+CLAUDE.md
+tasks/
+.mcp.json
+.env
+*.env
+
+# Claude Code internal config
+.claude/
+.claude-flow/
