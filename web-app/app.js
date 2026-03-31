@@ -278,7 +278,7 @@ async function startSystemAudioCapture() {
         // Show info line in transcript so user knows chunks arrive every 15s
         const infoEl = document.createElement('p');
         infoEl.className = 'system-audio-info';
-        infoEl.textContent = '🖥️ Meeting audio active — participant speech will appear every ~30 seconds';
+        infoEl.textContent = '🖥️ Meeting audio active — participant speech will appear every ~15 seconds';
         const lt = document.getElementById('liveTranscript');
         if (lt) { lt.querySelector('.placeholder')?.remove(); lt.appendChild(infoEl); }
         return true;
@@ -723,6 +723,7 @@ function addTranscriptSegment(text, source = 'mic') {
 
 function displaySegment(seg) {
     const container = document.getElementById('liveTranscript');
+    if (!container) return;
     container.querySelector('.placeholder')?.remove();
     const text = seg.corrected || seg.original;
     const div = document.createElement('div');
@@ -741,6 +742,7 @@ function displaySegment(seg) {
 
 function updateInterimTranscript(text) {
     const container = document.getElementById('liveTranscript');
+    if (!container) return;
     container.querySelector('.placeholder')?.remove();
     if (!interimElement) {
         interimElement = document.createElement('div');
@@ -1079,7 +1081,13 @@ async function analyzeWithOpenAI(text) {
     });
     if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.error?.message || 'OpenAI analysis failed'); }
     const data = await resp.json();
-    return JSON.parse(data.choices[0].message.content);
+    try {
+        return JSON.parse(data.choices[0].message.content);
+    } catch (e) {
+        const m = data.choices[0].message.content.match(/\{[\s\S]*\}/);
+        if (m) return JSON.parse(m[0]);
+        throw new Error('Invalid JSON from OpenAI');
+    }
 }
 
 async function analyzeWithAnthropic(text) {
@@ -1104,7 +1112,9 @@ async function analyzeWithAnthropic(text) {
     const content = data.content[0].text;
     const m = content.match(/\{[\s\S]*\}/);
     if (!m) throw new Error('Invalid JSON from Anthropic');
-    const parsed = JSON.parse(m[0]);
+    let parsed;
+    try { parsed = JSON.parse(m[0]); }
+    catch (e) { throw new Error('Invalid JSON from Anthropic: ' + e.message); }
     return { summary: parsed.summary || '', keyPoints: parsed.keyPoints || [], keyDecisions: parsed.keyDecisions || [], actionItems: parsed.actionItems || [], nextSteps: parsed.nextSteps || [] };
 }
 
@@ -1124,7 +1134,9 @@ async function analyzeWithGemini(text) {
     const content = data.candidates[0].content.parts[0].text;
     const m = content.match(/\{[\s\S]*\}/);
     if (!m) throw new Error('Invalid JSON from Gemini');
-    const parsed = JSON.parse(m[0]);
+    let parsed;
+    try { parsed = JSON.parse(m[0]); }
+    catch (e) { throw new Error('Invalid JSON from Gemini: ' + e.message); }
     return { summary: parsed.summary || '', keyPoints: parsed.keyPoints || [], keyDecisions: parsed.keyDecisions || [], actionItems: parsed.actionItems || [], nextSteps: parsed.nextSteps || [] };
 }
 
@@ -1147,7 +1159,13 @@ async function analyzeWithGroq(text) {
     });
     if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.error?.message || 'Groq analysis failed'); }
     const data = await resp.json();
-    const parsed = JSON.parse(data.choices[0].message.content);
+    let parsed;
+    try { parsed = JSON.parse(data.choices[0].message.content); }
+    catch (e) {
+        const m = data.choices[0].message.content.match(/\{[\s\S]*\}/);
+        if (m) parsed = JSON.parse(m[0]);
+        else throw new Error('Invalid JSON from Groq');
+    }
     return { summary: parsed.summary || '', keyPoints: parsed.keyPoints || [], keyDecisions: parsed.keyDecisions || [], actionItems: parsed.actionItems || [], nextSteps: parsed.nextSteps || [] };
 }
 
@@ -1343,8 +1361,9 @@ function loadTheme() {
 }
 
 function saveSettings() {
-    const apiKey = document.getElementById('openaiKey')?.value;
+    const apiKey = document.getElementById('openaiKey')?.value || '';
     if (apiKey) localStorage.setItem('openai_api_key', apiKey);
+    else localStorage.removeItem('openai_api_key');
     localStorage.setItem('target_lang', document.getElementById('targetLang').value);
     localStorage.setItem('source_lang', document.getElementById('sourceLang').value);
     localStorage.setItem('llm_provider', document.getElementById('llmProvider')?.value || 'groq');
@@ -1353,10 +1372,13 @@ function saveSettings() {
     localStorage.setItem('translation_provider', document.getElementById('translationProvider')?.value || 'google');
     const groqKey = document.getElementById('groqApiKey')?.value || '';
     if (groqKey) localStorage.setItem('groq_api_key', groqKey);
+    else localStorage.removeItem('groq_api_key');
     const anthropicKey = document.getElementById('anthropicKey')?.value || '';
     if (anthropicKey) localStorage.setItem('anthropic_api_key', anthropicKey);
+    else localStorage.removeItem('anthropic_api_key');
     const geminiKey = document.getElementById('geminiKey')?.value || '';
     if (geminiKey) localStorage.setItem('gemini_api_key', geminiKey);
+    else localStorage.removeItem('gemini_api_key');
 
     showToast('Settings saved!', 'success');
     toggleSettings();
@@ -1438,17 +1460,13 @@ function toggleFloatingOverlay() {
     overlayVisible = !overlayVisible;
     overlay.style.display = overlayVisible ? 'block' : 'none';
     const btn = document.getElementById('overlayToggleBtn');
-    if (btn) {
-        btn.classList.toggle('active', overlayVisible);
-        btn.innerHTML = `<span>📺</span> ${overlayVisible ? 'Hide Overlay' : 'Overlay'}`;
-    }
+    if (btn) btn.classList.toggle('active', overlayVisible);
 }
 
 function closeFloatingOverlay() {
     overlayVisible = false;
     document.getElementById('floatingOverlay').style.display = 'none';
     const btn = document.getElementById('overlayToggleBtn');
-    if (btn) btn.innerHTML = '<span>📺</span> Overlay';
     if (btn) btn.classList.remove('active');
 }
 
@@ -1480,6 +1498,7 @@ function pushOverlayCaption(text) {
     container.scrollTop = container.scrollHeight;
 
     if (pipWindow && !pipWindow.closed && pipCaptionEl) {
+        pipCaptionEl.querySelector('.pip-placeholder')?.remove();
         const d = pipWindow.document.createElement('div');
         d.className = 'pip-line';
         d.textContent = text;
@@ -1487,6 +1506,13 @@ function pushOverlayCaption(text) {
         while (pipCaptionEl.children.length > MAX_OVERLAY_LINES) {
             pipCaptionEl.removeChild(pipCaptionEl.firstChild);
         }
+        // Reclassify lines: latest = full white, recent = mid, rest = dimmed
+        const lines = pipCaptionEl.querySelectorAll('.pip-line');
+        lines.forEach((el, i) => {
+            el.className = 'pip-line';
+            if (i === lines.length - 1) el.classList.add('pip-latest');
+            else if (i === lines.length - 2) el.classList.add('pip-recent');
+        });
     }
 }
 
@@ -1524,9 +1550,12 @@ function initOverlayDrag() {
     document.addEventListener('mouseup', () => { isDragging = false; });
 }
 
+let pipFontLevel = 0;
+const PIP_FONTS = ['16px', '20px', '24px'];
+
 async function openDocumentPiP() {
     if (!('documentPictureInPicture' in window)) {
-        showToast('Document PiP requires Chrome or Edge 114+', 'warning');
+        showToast('Pop-out overlay requires Chrome or Edge 114+', 'warning');
         return;
     }
     if (pipWindow && !pipWindow.closed) {
@@ -1534,24 +1563,137 @@ async function openDocumentPiP() {
         return;
     }
     try {
-        pipWindow = await window.documentPictureInPicture.requestWindow({ width: 420, height: 180 });
+        pipWindow = await window.documentPictureInPicture.requestWindow({ width: 480, height: 200 });
+
         const style = pipWindow.document.createElement('style');
         style.textContent = `
-            body { margin: 0; padding: 8px 12px; background: rgba(0,0,0,0.88); color: #fff;
-                   font-family: system-ui, sans-serif; font-size: 17px; line-height: 1.5; overflow: hidden; }
-            .pip-line { margin-bottom: 4px; opacity: 0.6; }
-            .pip-line:last-child { opacity: 1; font-weight: 500; }
+            *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+            body {
+                background: rgba(10, 10, 10, 0.92);
+                color: #fff;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+                font-size: 16px;
+                line-height: 1.5;
+                overflow: hidden;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+            }
+            #pipHeader {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 6px 10px;
+                background: rgba(255,255,255,0.06);
+                border-bottom: 1px solid rgba(255,255,255,0.08);
+                flex-shrink: 0;
+                gap: 6px;
+            }
+            #pipLeft {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                font-size: 11px;
+                color: rgba(255,255,255,0.45);
+                font-weight: 500;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+            }
+            #pipDot {
+                width: 7px; height: 7px;
+                border-radius: 50%;
+                background: rgba(255,255,255,0.2);
+                flex-shrink: 0;
+                transition: background 0.4s;
+            }
+            #pipDot.recording { background: #f44; box-shadow: 0 0 6px #f44; animation: blink 1.2s infinite; }
+            @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+            #pipControls { display: flex; gap: 4px; }
+            .pip-btn {
+                background: rgba(255,255,255,0.1);
+                border: none;
+                color: rgba(255,255,255,0.6);
+                cursor: pointer;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-family: inherit;
+                transition: background 0.15s, color 0.15s;
+            }
+            .pip-btn:hover { background: rgba(255,255,255,0.22); color: #fff; }
+            #pipCaptions {
+                flex: 1;
+                padding: 10px 14px 12px;
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+                justify-content: flex-end;
+                gap: 4px;
+            }
+            .pip-line {
+                color: rgba(255,255,255,0.38);
+                font-size: 0.88em;
+                line-height: 1.45;
+                animation: fadeIn 0.2s ease;
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+            .pip-line.pip-latest {
+                color: #fff;
+                font-size: 1em;
+                font-weight: 500;
+            }
+            .pip-line.pip-recent { color: rgba(255,255,255,0.65); }
+            @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+            .pip-placeholder { color: rgba(255,255,255,0.2); font-size: 0.82em; font-style: italic; text-align: center; padding: 8px 0; }
         `;
         pipWindow.document.head.appendChild(style);
+
+        const header = pipWindow.document.createElement('div');
+        header.id = 'pipHeader';
+        header.innerHTML = `
+            <div id="pipLeft">
+                <div id="pipDot"></div>
+                <span>Live Captions</span>
+            </div>
+            <div id="pipControls">
+                <button class="pip-btn" id="pipFontBtn" title="Cycle font size">A+</button>
+            </div>
+        `;
+        pipWindow.document.body.appendChild(header);
+
         pipCaptionEl = pipWindow.document.createElement('div');
         pipCaptionEl.id = 'pipCaptions';
+        if (!overlayLines.length) {
+            pipCaptionEl.innerHTML = '<div class="pip-placeholder">Captions appear here when recording…</div>';
+        }
         pipWindow.document.body.appendChild(pipCaptionEl);
-        overlayLines.forEach(line => {
-            const d = pipWindow.document.createElement('div');
-            d.className = 'pip-line';
-            d.textContent = line;
-            pipCaptionEl.appendChild(d);
+
+        // Populate existing lines
+        if (overlayLines.length) {
+            overlayLines.forEach((line, i) => {
+                const d = pipWindow.document.createElement('div');
+                d.className = 'pip-line' + (i === overlayLines.length - 1 ? ' pip-latest' : i >= overlayLines.length - 2 ? ' pip-recent' : '');
+                d.textContent = line;
+                pipCaptionEl.appendChild(d);
+            });
+        }
+
+        // Font size cycle
+        pipFontLevel = 0;
+        pipWindow.document.getElementById('pipFontBtn').addEventListener('click', () => {
+            pipFontLevel = (pipFontLevel + 1) % PIP_FONTS.length;
+            pipCaptionEl.style.fontSize = PIP_FONTS[pipFontLevel];
         });
+
+        // Recording dot state
+        const updateDot = () => {
+            const dot = pipWindow.document.getElementById('pipDot');
+            if (dot) dot.classList.toggle('recording', appState === 'recording');
+        };
+        updateDot();
+        pipWindow._dotInterval = pipWindow.setInterval(updateDot, 1000);
+
         updatePiPButtonState(true);
         pipWindow.addEventListener('pagehide', () => {
             pipWindow = null;
@@ -1559,7 +1701,7 @@ async function openDocumentPiP() {
             updatePiPButtonState(false);
         });
     } catch (e) {
-        showToast('Could not open PiP window: ' + e.message, 'error');
+        showToast('Could not open pop-out: ' + e.message, 'error');
     }
 }
 
