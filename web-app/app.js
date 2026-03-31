@@ -97,13 +97,15 @@ function initSpeechRecognition() {
     const sourceLang = localStorage.getItem('source_lang') || 'en-US';
     if (recognition) { try { recognition.abort(); } catch (e) {} recognition = null; }
     recognition = new SpeechRecognition();
-    // Bilingual mode: use the secondary language (right of '+', typically en-US) for recognition.
-    // English models handle code-switching to Chinese far better than Chinese models handle English.
-    // detectTextLanguage() still correctly tags Chinese segments post-recognition.
-    recognition.lang = sourceLang.includes('+') ? sourceLang.split('+')[1] : sourceLang;
+    // Bilingual mode: use zh-TW as the primary recognition language.
+    // Taiwan meetings are primarily Chinese — the zh-TW model handles English loanwords
+    // naturally since Taiwanese speech always mixes them (OK, meeting, report, etc.).
+    // detectTextLanguage() tags each segment's language post-recognition.
+    recognition.lang = sourceLang.includes('+') ? sourceLang.split('+')[0] : sourceLang;
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
+    // In bilingual mode use more alternatives so the recognizer has better candidates for mixed speech
+    recognition.maxAlternatives = sourceLang.includes('+') ? 3 : 1;
     recognition.onstart = () => { speechActive = true; updateMicStatus('listening'); };
     recognition.onresult = (event) => { if (appState === 'recording') handleSpeechResult(event); };
     recognition.onerror = (event) => {
@@ -131,10 +133,23 @@ function initSpeechRecognition() {
 function handleSpeechResult(event) {
     let interimText = '';
     let finalText = '';
+    const isBilingual = (localStorage.getItem('source_lang') || '').includes('+');
     for (let i = event.resultIndex; i < event.results.length; i++) {
         const r = event.results[i];
-        if (r.isFinal) finalText += r[0].transcript;
-        else interimText += r[0].transcript;
+        // In bilingual mode, pick the alternative with the most Chinese characters if available,
+        // otherwise fall back to the top result. This helps catch Chinese words the top result missed.
+        let best = r[0].transcript;
+        if (isBilingual && r.length > 1) {
+            const hasChinese = t => /[\u4e00-\u9fff]/.test(t);
+            const topHasChinese = hasChinese(best);
+            if (!topHasChinese) {
+                for (let j = 1; j < r.length; j++) {
+                    if (hasChinese(r[j].transcript)) { best = r[j].transcript; break; }
+                }
+            }
+        }
+        if (r.isFinal) finalText += best;
+        else interimText += best;
     }
     if (finalText.trim()) {
         const combined = (speechSentenceBuffer + ' ' + finalText).trim();
@@ -323,7 +338,7 @@ async function transcribeSystemAudioChunk(blob) {
         const sourceLang = localStorage.getItem('source_lang') || 'en-US';
         if (sourceLang.includes('+')) {
             // Bilingual mode: let Whisper auto-detect, provide context via prompt
-            formData.append('prompt', 'Meeting conducted in Taiwanese Mandarin and English. Transcribe both languages accurately, using Traditional Chinese characters for Mandarin portions.');
+            formData.append('prompt', 'Meeting conducted in Taiwanese Mandarin (台灣中文) and English. Speakers frequently switch between the two languages mid-sentence. Transcribe ALL speech accurately — use Traditional Chinese characters (繁體中文) for Mandarin, keep English words in English. Do not translate. Common mixed phrases: "我覺得 this approach is better", "那個 deadline 是什麼時候".');
         } else {
             formData.append('language', sourceLang.split('-')[0]);
         }
@@ -565,7 +580,9 @@ function detectTextLanguage(text) {
     const chineseChars = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf\uff00-\uffef]/g) || []).length;
     const nonSpace = text.replace(/\s/g, '').length;
     if (nonSpace === 0) return 'en';
-    return (chineseChars / nonSpace) > 0.1 ? 'zh' : 'en';
+    // Lower threshold to 5% — catches sparse code-switching where only a few Chinese
+    // characters appear in an otherwise English sentence (common in Taiwanese speech)
+    return (chineseChars / nonSpace) > 0.05 ? 'zh' : 'en';
 }
 
 // ==================== TRANSLATION ENGINE ====================
@@ -1368,6 +1385,12 @@ function loadTheme() {
     }
 }
 
+function onSourceLangChange() {
+    const val = document.getElementById('sourceLang')?.value || '';
+    const hint = document.getElementById('bilingualHint');
+    if (hint) hint.style.display = val.includes('+') ? 'block' : 'none';
+}
+
 function saveSettings() {
     const apiKey = document.getElementById('openaiKey')?.value || '';
     if (apiKey) localStorage.setItem('openai_api_key', apiKey);
@@ -1406,7 +1429,7 @@ function loadSettings() {
     const targetEl = document.getElementById('targetLang');
     if (targetEl) targetEl.value = targetLang;
     const sourceEl = document.getElementById('sourceLang');
-    if (sourceEl) sourceEl.value = sourceLang;
+    if (sourceEl) { sourceEl.value = sourceLang; onSourceLangChange(); }
     if (document.getElementById('llmProvider')) { document.getElementById('llmProvider').value = llmProvider; onLLMProviderChange(); }
     if (document.getElementById('ollamaModel')) document.getElementById('ollamaModel').value = ollamaModel;
     if (document.getElementById('autoCorrectEnabled')) document.getElementById('autoCorrectEnabled').checked = autoCorrect;

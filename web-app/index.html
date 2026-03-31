@@ -154,7 +154,7 @@
                         <div class="settings-row-2col">
                             <div class="input-group">
                                 <label for="sourceLang">Speaking Language</label>
-                                <select id="sourceLang">
+                                <select id="sourceLang" onchange="onSourceLangChange()">
                                     <option value="zh-TW+en-US">🇹🇼 Taiwanese + English (Mixed)</option>
                                     <option value="zh-CN">Chinese (Mandarin)</option>
                                     <option value="zh-TW">Chinese (Taiwan)</option>
@@ -170,6 +170,7 @@
                                     <option value="pt-BR">Portuguese (BR)</option>
                                     <option value="hi-IN">Hindi</option>
                                 </select>
+                                <p class="settings-hint" id="bilingualHint" style="display:none;">💡 Mixed mode works best with <strong>Add Meeting Audio</strong> (Groq Whisper). Mic alone has limited code-switching accuracy.</p>
                             </div>
                             <div class="input-group">
                                 <label for="targetLang">Translate To</label>
