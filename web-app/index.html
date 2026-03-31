@@ -120,7 +120,14 @@
             <div class="live-preview" id="livePreview">
                 <div class="live-preview-header">
                     <h3>📝 Live Transcript</h3>
-                    <button class="btn btn-tiny btn-ghost" onclick="clearLiveTranscript()">Clear</button>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <select id="transcriptDisplayMode" onchange="setTranscriptDisplayMode(this.value)" class="btn btn-tiny btn-ghost" style="font-size:.72rem;padding:3px 6px;cursor:pointer;" title="What to show in transcript">
+                            <option value="both">Original + Translation</option>
+                            <option value="translation">Translation Only</option>
+                            <option value="original">Original Only</option>
+                        </select>
+                        <button class="btn btn-tiny btn-ghost" onclick="clearLiveTranscript()">Clear</button>
+                    </div>
                 </div>
                 <div class="transcript-container" id="liveTranscript">
                     <p class="placeholder">Transcript will appear here as you speak…</p>

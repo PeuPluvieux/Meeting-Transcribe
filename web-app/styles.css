@@ -525,6 +525,10 @@ body {
 .interim-text { color: var(--text-secondary); }
 .interim-translation { color: var(--primary); font-size: .8rem; margin-top: 3px; opacity: .75; }
 
+/* Transcript display mode */
+#liveTranscript.mode-translation .transcript-original { display: none; }
+#liveTranscript.mode-original .transcript-translation { display: none; }
+
 .translating {
     font-size: .75rem;
     color: var(--text-muted);

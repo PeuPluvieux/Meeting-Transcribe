@@ -144,12 +144,10 @@ function handleSpeechResult(event) {
         return;
     }
     if (interimText.trim()) {
-        const full = (speechSentenceBuffer + ' ' + interimText).trim();
-        updateInterimTranscript(full);
-        // Never commit from interim — only update buffer and display.
-        // Committing from interim + final arriving afterwards = guaranteed duplicate.
-        // Finals and the flush timer are the only two commit paths.
-        speechSentenceBuffer = full;
+        // Web Speech API interims are CUMULATIVE — each event already contains the full
+        // current utterance. Replace the buffer instead of appending to avoid repetition.
+        speechSentenceBuffer = interimText.trim();
+        updateInterimTranscript(interimText.trim());
         clearTimeout(speechSentenceFlushTimer);
         speechSentenceFlushTimer = setTimeout(flushSpeechBuffer, SPEECH_SENTENCE_TIMEOUT);
     }
@@ -793,6 +791,16 @@ function clearLiveTranscript() {
     if (container) container.innerHTML = '<p class="placeholder">Transcript will appear here as you speak…</p>';
 }
 
+function setTranscriptDisplayMode(mode) {
+    const container = document.getElementById('liveTranscript');
+    if (container) {
+        container.classList.remove('mode-translation', 'mode-original');
+        if (mode === 'translation') container.classList.add('mode-translation');
+        else if (mode === 'original') container.classList.add('mode-original');
+    }
+    localStorage.setItem('transcript_display_mode', mode);
+}
+
 // ==================== TIMER ====================
 function getElapsedSeconds() {
     if (!recordingStartTime) return 0;
@@ -1410,6 +1418,11 @@ function loadSettings() {
     if (document.getElementById('anthropicKey')) document.getElementById('anthropicKey').value = anthropicApiKey;
     const geminiApiKey = localStorage.getItem('gemini_api_key') || '';
     if (document.getElementById('geminiKey')) document.getElementById('geminiKey').value = geminiApiKey;
+
+    const displayMode = localStorage.getItem('transcript_display_mode') || 'both';
+    const modeSelect = document.getElementById('transcriptDisplayMode');
+    if (modeSelect) modeSelect.value = displayMode;
+    setTranscriptDisplayMode(displayMode);
 
     getKnowledgeBase();
     updateKBStats();
