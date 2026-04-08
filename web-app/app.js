@@ -1041,11 +1041,26 @@ async function processRecording() {
         } else {
             analysis = { summary: 'AI summary disabled.', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [] };
         }
-        meetingData.summary = analysis.summary || 'No summary generated.';
-        meetingData.keyPoints = analysis.keyPoints || [];
-        meetingData.keyDecisions = analysis.keyDecisions || [];
-        meetingData.actionItems = analysis.actionItems || [];
-        meetingData.nextSteps = analysis.nextSteps || [];
+        // Normalize all array items to strings — LLMs sometimes return objects
+        const toStr = item => {
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object') {
+                const parts = [];
+                if (item.task || item.Task) parts.push('Task: ' + (item.task || item.Task));
+                if (item.owner || item.Owner) parts.push('Owner: ' + (item.owner || item.Owner));
+                if (item.deadline || item.Deadline) parts.push('Deadline: ' + (item.deadline || item.Deadline));
+                if (item.context || item.Context) parts.push('Context: ' + (item.context || item.Context));
+                if (parts.length) return parts.join(' — ');
+                // Generic object: flatten to readable string
+                return Object.entries(item).map(([k, v]) => `${k}: ${v}`).join(' — ');
+            }
+            return String(item);
+        };
+        meetingData.summary = typeof analysis.summary === 'string' ? analysis.summary : (analysis.summary ? String(analysis.summary) : 'No summary generated.');
+        meetingData.keyPoints = (analysis.keyPoints || []).map(toStr);
+        meetingData.keyDecisions = (analysis.keyDecisions || []).map(toStr);
+        meetingData.actionItems = (analysis.actionItems || []).map(toStr);
+        meetingData.nextSteps = (analysis.nextSteps || []).map(toStr);
         buildCitations();
         showProcessingOverlay(true, 'Saving meeting…');
         await saveCurrentMeeting();
@@ -1104,12 +1119,14 @@ async function analyzeWithOpenAI(text) {
             response_format: { type: 'json_object' }
         })
     });
-    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.error?.message || 'OpenAI analysis failed'); }
+    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(`${err.error?.message || 'OpenAI analysis failed'} (HTTP ${resp.status})`); }
     const data = await resp.json();
+    const rawOpenAI = data.choices?.[0]?.message?.content;
+    if (!rawOpenAI) throw new Error('Empty response from OpenAI API');
     try {
-        return JSON.parse(data.choices[0].message.content);
+        return JSON.parse(rawOpenAI);
     } catch (e) {
-        const m = data.choices[0].message.content.match(/\{[\s\S]*\}/);
+        const m = rawOpenAI.match(/\{[\s\S]*\}/);
         if (m) return JSON.parse(m[0]);
         throw new Error('Invalid JSON from OpenAI');
     }
@@ -1129,12 +1146,14 @@ async function analyzeWithAnthropic(text) {
         body: JSON.stringify({
             model: 'claude-haiku-4-5-20251001',
             max_tokens: 4096,
-            messages: [{ role: 'user', content: QE_SYSTEM_PROMPT + '\n\nMeeting transcript:\n\n' + text }]
+            system: QE_SYSTEM_PROMPT,
+            messages: [{ role: 'user', content: 'Meeting transcript:\n\n' + text }]
         })
     });
-    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.error?.message || 'Anthropic analysis failed'); }
+    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(`${err.error?.message || 'Anthropic analysis failed'} (HTTP ${resp.status})`); }
     const data = await resp.json();
-    const content = data.content[0].text;
+    const content = data.content?.[0]?.text;
+    if (!content) throw new Error('Empty response from Anthropic API');
     const m = content.match(/\{[\s\S]*\}/);
     if (!m) throw new Error('Invalid JSON from Anthropic');
     let parsed;
@@ -1154,9 +1173,10 @@ async function analyzeWithGemini(text) {
             generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
         })
     });
-    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.error?.message || 'Gemini analysis failed'); }
+    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(`${err.error?.message || 'Gemini analysis failed'} (HTTP ${resp.status})`); }
     const data = await resp.json();
-    const content = data.candidates[0].content.parts[0].text;
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!content) throw new Error('Empty or blocked response from Gemini API');
     const m = content.match(/\{[\s\S]*\}/);
     if (!m) throw new Error('Invalid JSON from Gemini');
     let parsed;
@@ -1182,12 +1202,14 @@ async function analyzeWithGroq(text) {
             response_format: { type: 'json_object' }
         })
     });
-    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(err.error?.message || 'Groq analysis failed'); }
+    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(`${err.error?.message || 'Groq analysis failed'} (HTTP ${resp.status})`); }
     const data = await resp.json();
+    const rawGroq = data.choices?.[0]?.message?.content;
+    if (!rawGroq) throw new Error('Empty response from Groq API');
     let parsed;
-    try { parsed = JSON.parse(data.choices[0].message.content); }
+    try { parsed = JSON.parse(rawGroq); }
     catch (e) {
-        const m = data.choices[0].message.content.match(/\{[\s\S]*\}/);
+        const m = rawGroq.match(/\{[\s\S]*\}/);
         if (m) parsed = JSON.parse(m[0]);
         else throw new Error('Invalid JSON from Groq');
     }
@@ -1207,6 +1229,7 @@ function notionBlock(icon, title, bodyHTML) {
 
 // ==================== LINKED CITATIONS ====================
 function findBestSegment(itemText) {
+    if (typeof itemText !== 'string') itemText = String(itemText);
     const words = itemText.toLowerCase().split(/\s+/).filter(w => w.length > 3);
     if (words.length < 2) return null;
     let bestScore = 0, bestId = null;
@@ -1219,7 +1242,7 @@ function findBestSegment(itemText) {
 }
 
 function buildCitations() {
-    const cite = arr => arr.map(text => findBestSegment(text));
+    const cite = arr => (arr || []).map(text => findBestSegment(text));
     meetingData.citations = {
         keyPoints: cite(meetingData.keyPoints),
         keyDecisions: cite(meetingData.keyDecisions),
@@ -1308,6 +1331,7 @@ function formatFinalTranscript() {
 }
 
 function parseActionItem(item) {
+    if (typeof item !== 'string') item = typeof item === 'object' ? Object.entries(item).map(([k,v]) => `${k}: ${v}`).join(' — ') : String(item);
     const taskMatch = item.match(/Task:\s*([^—\-]+?)(?:\s*[—\-]|$)/);
     const ownerMatch = item.match(/Owner:\s*([^—\-]+?)(?:\s*[—\-]|$)/);
     const deadlineMatch = item.match(/Deadline:\s*([^—\-\n]+)/);
