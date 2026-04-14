@@ -30,6 +30,15 @@ let interimTranslateTimer = null;
 let lastInterimTranslation = '';
 let _lastAddedText = '';
 let _lastAddedAt = 0;
+
+// ==================== PARAGRAPH TRANSCRIPT STATE ====================
+let _currentParaGroup = null;
+let _currentParaText  = null;
+let _currentParaTransEl = null;
+let _interimSpan = null;
+let _lastSegmentEndedAt = 0;
+let _currentParaLang = null;
+const PARA_GAP_MS = 2500;
 let meetingData = {
     transcript: [],
     fullTranscript: '',
@@ -740,17 +749,60 @@ function displaySegment(seg) {
     const container = document.getElementById('liveTranscript');
     if (!container) return;
     container.querySelector('.placeholder')?.remove();
+
+    const now = Date.now();
     const text = seg.corrected || seg.original;
-    const div = document.createElement('div');
-    div.className = 'transcript-segment';
-    div.id = 'segment-' + seg.id;
-    const sourceBadge = seg.source === 'meeting' ? ' <span class="source-badge source-meeting">Meeting</span>' : '';
-    const langBadge = seg.languageFlag ? ` <span class="lang-badge" title="${seg.language === 'zh' ? '台灣中文' : 'English'}">${seg.languageFlag}</span>` : '';
-    div.innerHTML = `<div class="transcript-time">[${seg.timestamp}]${sourceBadge}${langBadge}</div>
-        <div class="transcript-original">${escapeHtml(text)}${seg.corrected ? ' <span class="corrected-badge">corrected</span>' : ''}</div>
-        <div class="transcript-translation" id="trans-${seg.id}"><span class="translating">Translating…</span></div>`;
-    if (interimElement) container.insertBefore(div, interimElement);
-    else container.appendChild(div);
+    const needsNewPara = !_currentParaGroup
+        || (now - _lastSegmentEndedAt) > PARA_GAP_MS
+        || seg.language !== _currentParaLang;
+
+    if (needsNewPara) {
+        const group = document.createElement('div');
+        group.className = 'para-group';
+
+        const timeEl = document.createElement('span');
+        timeEl.className = 'para-time';
+        timeEl.textContent = seg.timestamp;
+        group.appendChild(timeEl);
+
+        const paraText = document.createElement('p');
+        paraText.className = 'para-text';
+        group.appendChild(paraText);
+
+        const transEl = document.createElement('div');
+        transEl.className = 'para-translation';
+        group.appendChild(transEl);
+
+        container.appendChild(group);
+        _currentParaGroup = group;
+        _currentParaText = paraText;
+        _currentParaTransEl = transEl;
+        _currentParaLang = seg.language;
+    }
+
+    // Remove interim span and its translation preview before appending finalized text
+    if (_interimSpan) { _interimSpan.remove(); _interimSpan = null; }
+    _currentParaTransEl.querySelector('.interim-trans-span')?.remove();
+
+    // Append finalized span inline
+    const span = document.createElement('span');
+    span.className = 'final-span';
+    span.id = 'seg-' + seg.id;
+    span.textContent = text + ' ';
+    _currentParaText.appendChild(span);
+
+    // Append translation placeholder for this segment
+    const tSpan = document.createElement('span');
+    tSpan.className = 'para-trans-seg';
+    tSpan.id = 'trans-' + seg.id;
+    const tgtLang = localStorage.getItem('target_lang') || 'en';
+    if (tgtLang !== 'none') {
+        tSpan.innerHTML = '<span class="translating">…</span>';
+    }
+    _currentParaTransEl.appendChild(tSpan);
+
+    _lastSegmentEndedAt = now;
+
     const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
     if (nearBottom) container.scrollTop = container.scrollHeight;
 }
@@ -759,31 +811,61 @@ function updateInterimTranscript(text) {
     const container = document.getElementById('liveTranscript');
     if (!container) return;
     container.querySelector('.placeholder')?.remove();
-    if (!interimElement) {
-        interimElement = document.createElement('div');
-        interimElement.className = 'transcript-segment interim';
-        container.appendChild(interimElement);
+
+    // Ensure an active paragraph exists
+    if (!_currentParaGroup) {
+        const group = document.createElement('div');
+        group.className = 'para-group';
+
+        const elapsed = getElapsedSeconds();
+        const timeEl = document.createElement('span');
+        timeEl.className = 'para-time';
+        timeEl.textContent = formatTime(elapsed);
+        group.appendChild(timeEl);
+
+        const paraText = document.createElement('p');
+        paraText.className = 'para-text';
+        group.appendChild(paraText);
+
+        const transEl = document.createElement('div');
+        transEl.className = 'para-translation';
+        group.appendChild(transEl);
+
+        container.appendChild(group);
+        _currentParaGroup = group;
+        _currentParaText = paraText;
+        _currentParaTransEl = transEl;
     }
-    const elapsed = getElapsedSeconds();
-    interimElement.innerHTML = `<div class="transcript-time">[${formatTime(elapsed)}] <span class="interim-badge">listening…</span></div>
-        <div class="transcript-original interim-text">${escapeHtml(text)}</div>
-        <div class="transcript-translation interim-translation">${lastInterimTranslation ? '→ ' + escapeHtml(lastInterimTranslation) : ''}</div>`;
+
+    // Update (or create) the single reused interim span
+    if (!_interimSpan) {
+        _interimSpan = document.createElement('span');
+        _interimSpan.className = 'interim-span';
+        _currentParaText.appendChild(_interimSpan);
+    }
+    _interimSpan.textContent = text;
+
     const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
     if (atBottom) container.scrollTop = container.scrollHeight;
 
+    // Interim translation preview
     const tgtLang = localStorage.getItem('target_lang') || 'en';
     if (tgtLang !== 'none' && text.length > 3) {
         clearTimeout(interimTranslateTimer);
         interimTranslateTimer = setTimeout(async () => {
             const globalSrc = localStorage.getItem('source_lang') || 'en-US';
-            // In bilingual mode detect per-segment language instead of passing the raw compound code
             const detectedLang = globalSrc.includes('+') ? detectTextLanguage(text) : null;
             const src = detectedLang || globalSrc;
             const tr = await translateText(text, src, tgtLang);
-            if (tr && interimElement) {
+            if (tr && _interimSpan && _currentParaTransEl) {
                 lastInterimTranslation = tr;
-                const tDiv = interimElement.querySelector('.interim-translation');
-                if (tDiv) tDiv.innerHTML = '→ ' + escapeHtml(tr);
+                let iSpan = _currentParaTransEl.querySelector('.interim-trans-span');
+                if (!iSpan) {
+                    iSpan = document.createElement('span');
+                    iSpan.className = 'interim-trans-span';
+                    _currentParaTransEl.appendChild(iSpan);
+                }
+                iSpan.textContent = tr;
             }
         }, 600);
     }
@@ -806,6 +888,12 @@ function updateSegmentTranslation(id, translation) {
 function clearLiveTranscript() {
     const container = document.getElementById('liveTranscript');
     if (container) container.innerHTML = '<p class="placeholder">Transcript will appear here as you speak…</p>';
+    _currentParaGroup = null;
+    _currentParaText = null;
+    _currentParaTransEl = null;
+    _interimSpan = null;
+    _lastSegmentEndedAt = 0;
+    _currentParaLang = null;
 }
 
 function setTranscriptDisplayMode(mode) {
