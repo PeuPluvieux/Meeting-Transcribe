@@ -1,5 +1,5 @@
 // ============================================================
-// Meeting Notes AI v7.2
+// Meeting Notes AI v8.0
 // Web Speech API (mic) + System Audio via Groq Whisper
 // ============================================================
 
