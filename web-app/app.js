@@ -637,6 +637,31 @@ function cacheTranslation(text, src, tgt, result) {
     translationCache.set(getTranslationCacheKey(text, src, tgt), result);
 }
 
+// ── Chrome Translator API (Chrome 138+, on-device, free, unlimited) ───────────
+// Cache translator instances — expensive to create, cheap to reuse
+const _chromeTranslatorCache = {};
+
+async function chromeTranslate(text, src, tgt) {
+    if (!('Translator' in window)) return null;
+    const cacheKey = `${src}|${tgt}`;
+    try {
+        if (!_chromeTranslatorCache[cacheKey]) {
+            const avail = await Translator.availability({ sourceLanguage: src, targetLanguage: tgt });
+            if (avail === 'unavailable') return null;
+            // 'downloadable' or 'downloading' — Chrome will download the model; create() waits for it
+            _chromeTranslatorCache[cacheKey] = await Translator.create({
+                sourceLanguage: src,
+                targetLanguage: tgt
+            });
+        }
+        const result = await _chromeTranslatorCache[cacheKey].translate(text);
+        return result?.trim() || null;
+    } catch (e) {
+        delete _chromeTranslatorCache[cacheKey]; // clear bad instance
+        return null;
+    }
+}
+
 async function translateText(text, sourceLang, targetLang) {
     try {
         if (!text || text.trim().length < 2) return null;
@@ -651,10 +676,17 @@ async function translateText(text, sourceLang, targetLang) {
         const provider = localStorage.getItem('translation_provider') || 'google';
         let result = null;
 
+        // 1. Ollama (if explicitly selected and connected)
         if (provider === 'ollama' && ollamaConnected) {
             result = await ollamaTranslate(text, src, targetLang);
         }
 
+        // 2. Chrome Translator API — on-device, no quota, no key (Chrome 138+)
+        if (!result) {
+            result = await chromeTranslate(text, src, targetLang);
+        }
+
+        // 3. Google Translate unofficial endpoint (fallback for non-Chrome / older Chrome)
         if (!result) {
             result = await googleTranslate(text, src, targetLang);
         }
@@ -1422,32 +1454,87 @@ async function analyzeWithGemini(text) {
 async function analyzeWithGroq(text) {
     const groqKey = localStorage.getItem('groq_api_key');
     if (!groqKey) throw new Error('Groq API key not configured. Add it in Settings.');
-    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + groqKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            model: 'llama-3.3-70b-versatile',
-            messages: [
-                { role: 'system', content: QE_SYSTEM_PROMPT },
-                { role: 'user', content: 'Meeting transcript:\n\n' + text }
-            ],
-            temperature: 0.3,
-            max_tokens: 4096,
-            response_format: { type: 'json_object' }
-        })
-    });
-    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(`${err.error?.message || 'Groq analysis failed'} (HTTP ${resp.status})`); }
-    const data = await resp.json();
-    const rawGroq = data.choices?.[0]?.message?.content;
-    if (!rawGroq) throw new Error('Empty response from Groq API');
-    let parsed;
-    try { parsed = JSON.parse(rawGroq); }
-    catch (e) {
-        const m = rawGroq.match(/\{[\s\S]*\}/);
-        if (m) parsed = JSON.parse(m[0]);
-        else throw new Error('Invalid JSON from Groq');
+
+    // Groq free tier: 6,000 TPM — keep chunks small so each call stays under the limit
+    const GROQ_CHUNK_CHARS = 12000; // ~3k tokens; leaves headroom for system prompt + output
+    const GROQ_MODEL = 'llama-3.3-70b-versatile';
+
+    async function _groqCall(transcript, chunkLabel = '') {
+        const userMsg = chunkLabel
+            ? `PARTIAL TRANSCRIPT ${chunkLabel}:\n\n${transcript}`
+            : `Meeting transcript:\n\n${transcript}`;
+        let lastErr;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            if (attempt > 0) {
+                showProcessingOverlay(true, `Groq rate limit — retrying (${attempt + 1}/3)…`);
+                await new Promise(r => setTimeout(r, attempt * 3000));
+            }
+            try {
+                const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + groqKey, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: GROQ_MODEL,
+                        messages: [
+                            { role: 'system', content: MITAC_SYSTEM_PROMPT },
+                            { role: 'user', content: userMsg }
+                        ],
+                        temperature: 0.3,
+                        max_tokens: 4096,
+                        response_format: { type: 'json_object' }
+                    }),
+                    signal: AbortSignal.timeout(60000)
+                });
+                if (resp.status === 429) { lastErr = new Error('Groq rate limit — will retry'); continue; }
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    throw new Error(`${err.error?.message || 'Groq analysis failed'} (HTTP ${resp.status})`);
+                }
+                const data = await resp.json();
+                const raw = data.choices?.[0]?.message?.content;
+                if (!raw) throw new Error('Empty response from Groq');
+                try { return JSON.parse(raw); }
+                catch (e) {
+                    const m = raw.match(/\{[\s\S]*\}/);
+                    if (m) return JSON.parse(m[0]);
+                    throw new Error('Invalid JSON from Groq: ' + e.message);
+                }
+            } catch (e) {
+                if (e.name === 'AbortError') { lastErr = new Error('Groq request timed out'); continue; }
+                throw e;
+            }
+        }
+        throw lastErr || new Error('Groq analysis failed after retries');
     }
-    return { summary: parsed.summary || '', keyPoints: parsed.keyPoints || [], keyDecisions: parsed.keyDecisions || [], actionItems: parsed.actionItems || [], nextSteps: parsed.nextSteps || [] };
+
+    // ── Short transcript — single call ────────────────────────────────────────
+    if (text.length <= GROQ_CHUNK_CHARS) {
+        showProcessingOverlay(true, 'Analyzing with Groq (MiTAC QA mode)…');
+        const parsed = await _groqCall(text);
+        return _mapClaudeResponse(parsed); // same JSON schema as Claude
+    }
+
+    // ── Long transcript — chunk, then merge ───────────────────────────────────
+    const chunks = [];
+    for (let i = 0; i < text.length; i += GROQ_CHUNK_CHARS) chunks.push(text.slice(i, i + GROQ_CHUNK_CHARS));
+    showProcessingOverlay(true, `Long meeting — processing ${chunks.length} sections with Groq…`);
+
+    const partials = [];
+    for (let i = 0; i < chunks.length; i++) {
+        showProcessingOverlay(true, `Groq: analyzing section ${i + 1} of ${chunks.length}…`);
+        const p = await _groqCall(chunks[i], `(section ${i + 1} of ${chunks.length})`);
+        partials.push(p);
+        if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 2000)); // TPM buffer
+    }
+
+    return {
+        summary:            partials.map((p, i) => `[Part ${i + 1}]\n${p.summary || ''}`).join('\n\n'),
+        keyPoints:          partials.flatMap(p => p.keyPoints   || []),
+        keyDecisions:       partials.flatMap(p => p.keyDecisions || []),
+        actionItems:        partials.flatMap(p => p.actionItems  || p.action_items || []),
+        nextSteps:          partials.flatMap(p => p.nextSteps    || []),
+        cleaned_transcript: partials.map(p => p.cleaned_transcript || '').filter(Boolean).join('\n\n')
+    };
 }
 
 // ==================== DISPLAY ====================
