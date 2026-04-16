@@ -268,8 +268,8 @@
                     <div class="input-group">
                         <label for="llmProvider">Provider</label>
                         <select id="llmProvider" onchange="onLLMProviderChange()">
-                            <option value="groq">Groq (Free API — Recommended)</option>
-                            <option value="anthropic">Anthropic Claude (Paid)</option>
+                            <option value="anthropic">Claude (Recommended — MiTAC QA, mixed-language)</option>
+                            <option value="groq">Groq (Free API — general use)</option>
                             <option value="openai">OpenAI GPT (Paid)</option>
                             <option value="gemini">Google Gemini (Free tier)</option>
                             <option value="ollama">Ollama (Local, FREE)</option>
@@ -303,7 +303,7 @@
                         <div class="input-group">
                             <label for="anthropicKey">Anthropic API Key</label>
                             <input type="password" id="anthropicKey" placeholder="sk-ant-..." style="width:100%;" onchange="saveSettings()">
-                            <p class="settings-hint">Get your key at <strong>console.anthropic.com</strong> — uses Claude Haiku (fast &amp; affordable)</p>
+                            <p class="settings-hint">Get your key at <strong>console.anthropic.com</strong> — uses <strong>claude-sonnet-4-6</strong>. Cleans, translates, and analyzes with full MiTAC QA context (OQC, DPPM, CAPA, etc.)</p>
                         </div>
                     </div>
                     <!-- OpenAI Settings -->

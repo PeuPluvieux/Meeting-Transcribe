@@ -54,6 +54,35 @@ let meetingData = {
 // ==================== QE SYSTEM PROMPT ====================
 const QE_SYSTEM_PROMPT = `You are an expert meeting analyst. Analyze this meeting transcript and respond ONLY with valid JSON. Be COMPREHENSIVE and detailed — err on the side of MORE detail, never summarize too briefly. Capture EVERY topic, decision, concern, and action discussed.\n{"summary":"4-6 detailed paragraphs covering ALL major topics discussed in order. Include specific names, numbers, metrics, part numbers, defect descriptions, root causes, concerns raised, and conclusions reached. Do NOT omit any topic that was discussed for more than a few sentences.","keyPoints":["Up to 20 specific, concrete facts — include part numbers, defect counts, percentages, names, dates, deadlines, process steps, or any specific detail that was mentioned"],"keyDecisions":["Every explicit decision made — what was decided, who decided, why — empty array if none"],"actionItems":["Full context for each item: Task: [detailed description of what needs to be done] — Owner: [person responsible] — Deadline: [date or timeframe] — Context: [why this action is needed]"],"nextSteps":["Every follow-up action, inspection, escalation, or pending item — include who needs to do what and by when — empty array if none"]}`;
 
+// ==================== MITAC QA SYSTEM PROMPT ====================
+// Used by analyzeWithAnthropic() — context-aware for MiTAC server manufacturing QA meetings
+const MITAC_SYSTEM_PROMPT = `You are an expert meeting analyst and translator for MiTAC Computing Technology, a server manufacturing company. You process QA/OQC (Quality Control) meeting transcripts that contain mixed Mandarin Chinese (Traditional/Taiwanese) and English speech.
+
+YOUR TASKS:
+1. CLEAN UP the transcript — remove filler words, stutters, false starts, and crosstalk artifacts
+2. TRANSLATE all non-English content to English — accurately preserve code-switched segments
+3. PRESERVE these technical terms EXACTLY as written (never translate or alter them):
+   OQC, IPQC, DPPM, MDI, NCR, CAPA, FAI, BMC, iDRAC, PTU, PN, SN, ZOU, HOU, RMA, BOM, ECO, PCB, PCBA, DOA, DOE, FMEA, SOP, WI, QMS
+4. GENERATE a comprehensive meeting summary capturing all key topics, decisions, defects, metrics, and concerns
+5. EXTRACT action items with owners and deadlines wherever identifiable
+
+RESPOND ONLY with valid JSON — no markdown, no code fences, no explanation, just the raw JSON object:
+{
+  "cleaned_transcript": "Complete cleaned and English-translated transcript, preserving all technical terms and timestamps if present",
+  "summary": "3-5 detailed paragraphs covering all major topics, defect findings, root causes, metrics (DPPM, yield, etc.), decisions, and concerns raised",
+  "keyPoints": ["Specific concrete fact — include part numbers, defect counts, percentages, DPPM values, deadlines, names"],
+  "keyDecisions": ["Explicit decision made — what was decided, who decided, why — empty array if none"],
+  "actionItems": [
+    {
+      "task": "Specific description of what needs to be done",
+      "owner": "Person responsible (use TBD if unknown)",
+      "deadline": "When it is due (use TBD if unspecified)",
+      "context": "Why this action is needed or what triggered it"
+    }
+  ],
+  "nextSteps": ["Follow-up action or pending item with owner and timing where known"]
+}`;
+
 // ==================== OLLAMA ====================
 const OLLAMA_API = 'http://localhost:11434';
 let ollamaConnected = false;
@@ -342,12 +371,12 @@ async function transcribeSystemAudioChunk(blob) {
     try {
         const formData = new FormData();
         formData.append('file', blob, 'audio.webm');
-        formData.append('model', 'whisper-large-v3-turbo');
+        formData.append('model', 'whisper-large-v3');
         formData.append('response_format', 'json');
         const sourceLang = localStorage.getItem('source_lang') || 'en-US';
         if (sourceLang.includes('+')) {
             // Bilingual mode: let Whisper auto-detect, provide context via prompt
-            formData.append('prompt', 'Meeting conducted in Taiwanese Mandarin (台灣中文) and English. Speakers frequently switch between the two languages mid-sentence. Transcribe ALL speech accurately — use Traditional Chinese characters (繁體中文) for Mandarin, keep English words in English. Do not translate. Common mixed phrases: "我覺得 this approach is better", "那個 deadline 是什麼時候".');
+            formData.append('prompt', 'MiTAC Computing Technology QA/OQC meeting. Conducted in Taiwanese Mandarin (台灣中文) and English. Speakers frequently switch languages mid-sentence. Transcribe ALL speech — use Traditional Chinese characters (繁體中文) for Mandarin, keep English as-is. Preserve these terms exactly: OQC, IPQC, DPPM, MDI, NCR, CAPA, FAI, BMC, iDRAC, PTU, PN, SN, ZOU, HOU. Do not translate. Common patterns: "OQC 這邊發現", "DPPM 超標", "NCR 要開", "這個 PN 的 issue".');
         } else {
             formData.append('language', sourceLang.split('-')[0]);
         }
@@ -1144,6 +1173,10 @@ async function processRecording() {
             }
             return String(item);
         };
+        // If Claude returned a cleaned+translated transcript, use it as the canonical full transcript
+        if (analysis.cleaned_transcript) {
+            meetingData.fullTranscript = analysis.cleaned_transcript;
+        }
         meetingData.summary = typeof analysis.summary === 'string' ? analysis.summary : (analysis.summary ? String(analysis.summary) : 'No summary generated.');
         meetingData.keyPoints = (analysis.keyPoints || []).map(toStr);
         meetingData.keyDecisions = (analysis.keyDecisions || []).map(toStr);
@@ -1220,34 +1253,147 @@ async function analyzeWithOpenAI(text) {
     }
 }
 
+// ── Claude / Anthropic pipeline (MiTAC QA context) ──────────────────────────
+
+const CLAUDE_MODEL = 'claude-sonnet-4-6';
+// Max chars per Claude call. claude-sonnet-4-6 has 200k token context; we stay
+// well under that (~50k tokens) so the response has plenty of room too.
+const CLAUDE_MAX_CHUNK_CHARS = 120000;
+
+/**
+ * Call Claude API once with retry on transient errors (rate-limit, overload, timeout).
+ * Returns the raw parsed JSON from Claude.
+ */
+async function _claudeAPICall(key, systemPrompt, userContent, timeoutMs = 120000) {
+    const MAX_RETRIES = 3;
+    let lastError;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        if (attempt > 0) {
+            const delay = Math.pow(2, attempt - 1) * 2000; // 2s, 4s
+            showProcessingOverlay(true, `Claude timeout/overload — retrying (${attempt + 1}/${MAX_RETRIES})…`);
+            await new Promise(r => setTimeout(r, delay));
+        }
+        try {
+            const resp = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: {
+                    'x-api-key': key,
+                    'anthropic-version': '2023-06-01',
+                    'content-type': 'application/json',
+                    'anthropic-dangerous-direct-browser-access': 'true'
+                },
+                body: JSON.stringify({
+                    model: CLAUDE_MODEL,
+                    max_tokens: 8192,
+                    system: systemPrompt,
+                    messages: [{ role: 'user', content: userContent }]
+                }),
+                signal: AbortSignal.timeout(timeoutMs)
+            });
+
+            // Transient server errors — retry
+            if (resp.status === 529 || resp.status === 503 || resp.status === 502) {
+                lastError = new Error(`Claude temporarily overloaded (HTTP ${resp.status})`);
+                continue;
+            }
+
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(`${err.error?.message || 'Claude analysis failed'} (HTTP ${resp.status})`);
+            }
+
+            const data = await resp.json();
+            const content = data.content?.[0]?.text;
+            if (!content) throw new Error('Empty response from Claude API');
+
+            // Extract JSON — Claude may wrap it in markdown code fences
+            const m = content.match(/\{[\s\S]*\}/);
+            if (!m) throw new Error('Claude did not return a JSON object. Raw response: ' + content.slice(0, 300));
+
+            try { return JSON.parse(m[0]); }
+            catch (e) { throw new Error('Invalid JSON from Claude: ' + e.message); }
+
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                lastError = new Error('Claude request timed out after ' + Math.round(timeoutMs / 1000) + 's');
+                continue; // retry on timeout
+            }
+            throw e; // non-retryable error
+        }
+    }
+    throw lastError || new Error('Claude API failed after retries');
+}
+
+/**
+ * Main Anthropic/Claude analysis function.
+ * Uses MITAC_SYSTEM_PROMPT for context-aware cleaning, translation, and analysis.
+ * Chunks transcripts that exceed CLAUDE_MAX_CHUNK_CHARS.
+ */
 async function analyzeWithAnthropic(text) {
     const key = localStorage.getItem('anthropic_api_key');
     if (!key) throw new Error('Anthropic API key not configured. Add it in Settings.');
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-            'x-api-key': key,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json',
-            'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-            model: 'claude-haiku-4-5-20251001',
-            max_tokens: 4096,
-            system: QE_SYSTEM_PROMPT,
-            messages: [{ role: 'user', content: 'Meeting transcript:\n\n' + text }]
-        })
-    });
-    if (!resp.ok) { const err = await resp.json().catch(() => ({})); throw new Error(`${err.error?.message || 'Anthropic analysis failed'} (HTTP ${resp.status})`); }
-    const data = await resp.json();
-    const content = data.content?.[0]?.text;
-    if (!content) throw new Error('Empty response from Anthropic API');
-    const m = content.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error('Invalid JSON from Anthropic');
-    let parsed;
-    try { parsed = JSON.parse(m[0]); }
-    catch (e) { throw new Error('Invalid JSON from Anthropic: ' + e.message); }
-    return { summary: parsed.summary || '', keyPoints: parsed.keyPoints || [], keyDecisions: parsed.keyDecisions || [], actionItems: parsed.actionItems || [], nextSteps: parsed.nextSteps || [] };
+
+    // ── Short transcript: single call ────────────────────────────────────────
+    if (text.length <= CLAUDE_MAX_CHUNK_CHARS) {
+        showProcessingOverlay(true, 'Cleaning & translating transcript with Claude…');
+        const parsed = await _claudeAPICall(key, MITAC_SYSTEM_PROMPT,
+            'Meeting transcript:\n\n' + text);
+        return _mapClaudeResponse(parsed);
+    }
+
+    // ── Long transcript: chunk → partial summaries → synthesize ──────────────
+    const chunks = [];
+    for (let i = 0; i < text.length; i += CLAUDE_MAX_CHUNK_CHARS) {
+        chunks.push(text.slice(i, i + CLAUDE_MAX_CHUNK_CHARS));
+    }
+    showProcessingOverlay(true, `Long meeting — processing ${chunks.length} chunks with Claude…`);
+
+    const partials = [];
+    for (let i = 0; i < chunks.length; i++) {
+        showProcessingOverlay(true, `Claude: analyzing chunk ${i + 1} of ${chunks.length}…`);
+        const p = await _claudeAPICall(key, MITAC_SYSTEM_PROMPT,
+            `PARTIAL TRANSCRIPT (section ${i + 1} of ${chunks.length}):\n\n` + chunks[i]);
+        partials.push(p);
+    }
+
+    // Combine into a final synthesis pass
+    showProcessingOverlay(true, 'Claude: synthesizing full meeting analysis…');
+    const combinedSummaries = partials.map((p, i) =>
+        `[Section ${i + 1}]\n${p.summary || '(no summary)'}`
+    ).join('\n\n');
+
+    const synthPrompt = `You are synthesizing ${chunks.length} partial summaries of a single MiTAC QA meeting into one cohesive final analysis. Combine them without duplication. Output valid JSON with the same schema (no cleaned_transcript needed):\n\n${combinedSummaries}`;
+    const synth = await _claudeAPICall(key, MITAC_SYSTEM_PROMPT, synthPrompt);
+
+    // Merge action items and key points from all partials
+    const allActionItems = partials.flatMap(p => p.actionItems || p.action_items || []);
+    const allKeyPoints   = partials.flatMap(p => p.keyPoints || []);
+    const allDecisions   = partials.flatMap(p => p.keyDecisions || []);
+    const allNextSteps   = partials.flatMap(p => p.nextSteps || []);
+    const allTranscripts = partials.map(p => p.cleaned_transcript || '').filter(Boolean).join('\n\n');
+
+    return {
+        summary:          synth.summary          || partials.map(p => p.summary || '').join('\n\n'),
+        keyPoints:        synth.keyPoints         || allKeyPoints,
+        keyDecisions:     synth.keyDecisions      || allDecisions,
+        actionItems:      synth.actionItems       || allActionItems,
+        nextSteps:        synth.nextSteps         || allNextSteps,
+        cleaned_transcript: allTranscripts
+    };
+}
+
+/** Normalize Claude's response to the shape processRecording() expects. */
+function _mapClaudeResponse(parsed) {
+    return {
+        summary:            parsed.summary            || '',
+        keyPoints:          parsed.keyPoints          || [],
+        keyDecisions:       parsed.keyDecisions       || [],
+        // Support both "actionItems" (camelCase) and "action_items" (snake_case) from Claude
+        actionItems:        parsed.actionItems        || parsed.action_items || [],
+        nextSteps:          parsed.nextSteps          || [],
+        // Pass through so processRecording() can update fullTranscript
+        cleaned_transcript: parsed.cleaned_transcript || null
+    };
 }
 
 async function analyzeWithGemini(text) {
