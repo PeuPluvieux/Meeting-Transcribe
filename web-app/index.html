@@ -3,11 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AI-powered meeting transcription and summarization. Real-time mic transcription, system audio capture, multilingual translation, and smart summaries.">
     <title>Meeting Notes AI</title>
-    <link rel="stylesheet" href="styles.css?v=8.0">
+    <link rel="preload" href="styles.css?v=8.0" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="styles.css?v=8.0"></noscript>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
 </head>
 <body>
 
@@ -68,6 +71,7 @@
     </div>
 
     <!-- ========== MAIN CONTAINER ========== -->
+    <main>
     <div class="container">
 
         <!-- Header -->
@@ -490,7 +494,8 @@
             </div>
         </div>
     </div>
+    </main>
 
-    <script src="app.js?v=8.0"></script>
+    <script src="app.js?v=8.0" defer></script>
 </body>
 </html>
