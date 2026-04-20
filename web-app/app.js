@@ -91,6 +91,7 @@ let ollamaModels = [];
 // ==================== WEB SPEECH API ====================
 let recognition = null;
 let speechActive = false;
+let _recognitionReconnectTimer = null;
 let speechSentenceBuffer = '';
 let speechSentenceFlushTimer = null;
 const SPEECH_SENTENCE_TIMEOUT = 1000;
@@ -99,6 +100,7 @@ const SENTENCE_END_RE = /[.?!。？！…]+\s*$/;
 // ==================== SYSTEM AUDIO (Groq Whisper) ====================
 let systemAudioRecorder = null;
 let systemAudioActive = false;
+let systemAudioRecorderActive = false;
 let systemAudioChunks = [];
 let systemAudioChunkTimer = null;
 let systemAudioChunkStartTime = null;
@@ -162,7 +164,10 @@ function initSpeechRecognition() {
         speechActive = false;
         updateMicStatus(appState === 'recording' ? 'reconnecting' : 'idle');
         if (appState === 'recording') {
-            setTimeout(() => { if (appState === 'recording' && recognition) { try { recognition.start(); } catch(e){} } }, 300);
+            _recognitionReconnectTimer = setTimeout(() => {
+                _recognitionReconnectTimer = null;
+                if (appState === 'recording' && recognition) { try { recognition.start(); } catch(e){} }
+            }, 300);
         }
     };
     return true;
@@ -229,6 +234,8 @@ async function startSpeechRecognition() {
 }
 
 function stopSpeechRecognition() {
+    clearTimeout(_recognitionReconnectTimer);
+    _recognitionReconnectTimer = null;
     flushSpeechBuffer();
     if (recognition) { try { recognition.stop(); } catch (e) {} }
     speechActive = false;
@@ -298,6 +305,7 @@ async function startSystemAudioCapture() {
         systemAudioChunks = [];
         systemAudioRecorder.ondataavailable = (e) => { if (e.data.size > 0) systemAudioChunks.push(e.data); };
         systemAudioRecorder.onstop = () => {
+            if (!systemAudioRecorderActive) { systemAudioChunks = []; systemAudioChunkStartTime = null; return; }
             const elapsed = systemAudioChunkStartTime ? Date.now() - systemAudioChunkStartTime : 0;
             if (systemAudioChunks.length && elapsed >= 2000) {
                 const blob = new Blob(systemAudioChunks, { type: mimeType });
@@ -309,6 +317,7 @@ async function startSystemAudioCapture() {
                 systemAudioChunkStartTime = null;
             }
         };
+        systemAudioRecorderActive = true;
         systemAudioRecorder.start(SYSTEM_AUDIO_CHUNK_MS);
         systemAudioChunkStartTime = Date.now();
         systemAudioChunkTimer = setInterval(() => {
@@ -341,6 +350,7 @@ async function startSystemAudioCapture() {
 }
 
 function stopSystemAudioCapture() {
+    systemAudioRecorderActive = false;
     clearInterval(systemAudioChunkTimer); systemAudioChunkTimer = null;
     if (systemAudioRecorder) {
         try { if (systemAudioRecorder.state !== 'inactive') systemAudioRecorder.stop(); } catch (e) {}
@@ -446,7 +456,15 @@ async function saveMeeting(meeting) {
         const store = tx.objectStore(STORE_NAME);
         const req = store.put(meeting);
         req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
+        req.onerror = () => {
+            const err = req.error;
+            if (err?.name === 'QuotaExceededError') {
+                showToast('Storage full — clear old meetings to save new ones.', 'error');
+                reject(new Error('Storage quota exceeded'));
+            } else {
+                reject(err);
+            }
+        };
     });
 }
 
@@ -495,7 +513,9 @@ async function searchMeetings(query) {
 }
 
 // ==================== OLLAMA ====================
+let _ollamaCheckedAt = 0;
 async function checkOllamaConnection() {
+    if (Date.now() - _ollamaCheckedAt < 30000) return ollamaConnected;
     updateOllamaStatus('checking');
     try {
         const response = await fetch(OLLAMA_API + '/api/tags', {
@@ -506,6 +526,7 @@ async function checkOllamaConnection() {
             const data = await response.json();
             ollamaConnected = true;
             ollamaModels = data.models || [];
+            _ollamaCheckedAt = Date.now();
             updateOllamaStatus('connected');
             populateOllamaModels();
             return true;
@@ -515,6 +536,7 @@ async function checkOllamaConnection() {
     }
     ollamaConnected = false;
     ollamaModels = [];
+    _ollamaCheckedAt = Date.now();
     updateOllamaStatus('disconnected');
     return false;
 }
@@ -755,6 +777,7 @@ const _normalizeForDedup = s => s.trim().replace(/[.!?。？！…,，、]+$/, '
 
 function addTranscriptSegment(text, source = 'mic') {
     if (!text.trim()) return;
+    if (appState === 'stopping' || appState === 'processing') return;
     // Deduplication: skip if same text (modulo trailing punctuation) was just added within 3s.
     // Catches: flush fires then final arrives with slight punctuation difference.
     const now = Date.now();
@@ -774,6 +797,7 @@ function addTranscriptSegment(text, source = 'mic') {
         translated: null,
         language: null,
         languageFlag: null,
+        speaker: null,
         source
     };
 
@@ -792,10 +816,21 @@ function addTranscriptSegment(text, source = 'mic') {
     const tgtLang = localStorage.getItem('target_lang') || 'en';
     const srcLang = seg.language || globalSrcLang;
     if (tgtLang !== 'none') {
+        const segmentId = seg.id;
         translateText(displayText, srcLang, tgtLang).then(tr => {
-            if (tr) { seg.translated = tr; updateSegmentTranslation(seg.id, tr); }
-            else { const el = document.getElementById('trans-' + seg.id); if (el) el.style.display = 'none'; }
-        }).catch(() => { const el = document.getElementById('trans-' + seg.id); if (el) el.style.display = 'none'; });
+            if (tr) {
+                seg.translated = tr;
+                const el = document.getElementById('trans-' + segmentId);
+                if (el && document.contains(el)) updateSegmentTranslation(segmentId, tr);
+            } else {
+                const el = document.getElementById('trans-' + segmentId);
+                if (el) el.style.display = 'none';
+            }
+        }).catch(err => {
+            console.debug('[Translation] error for seg', segmentId, err);
+            const el = document.getElementById('trans-' + segmentId);
+            if (el) el.style.display = 'none';
+        });
     } else {
         const el = document.getElementById('trans-' + seg.id);
         if (el) el.style.display = 'none';
@@ -918,7 +953,7 @@ function updateInterimTranscript(text) {
             const detectedLang = globalSrc.includes('+') ? detectTextLanguage(text) : null;
             const src = detectedLang || globalSrc;
             const tr = await translateText(text, src, tgtLang);
-            if (tr && _interimSpan && _currentParaTransEl) {
+            if (tr && _interimSpan && _currentParaTransEl && document.contains(_interimSpan)) {
                 lastInterimTranslation = tr;
                 let iSpan = _currentParaTransEl.querySelector('.interim-trans-span');
                 if (!iSpan) {
@@ -1082,8 +1117,10 @@ async function resumeRecording() {
 async function stopRecording() {
     if (appState !== 'recording' && appState !== 'paused') return;
     if (appState === 'paused' && pauseStartTime) { pausedDuration += Date.now() - pauseStartTime; pauseStartTime = null; }
+    setAppState('stopping');
     stopSpeechRecognition();
     stopSystemAudioCapture();
+    await new Promise(r => setTimeout(r, 500));
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'none';
     const dot = document.getElementById('overlayRecDot');
@@ -1467,7 +1504,7 @@ async function analyzeWithGroq(text) {
         for (let attempt = 0; attempt < 3; attempt++) {
             if (attempt > 0) {
                 showProcessingOverlay(true, `Groq rate limit — retrying (${attempt + 1}/3)…`);
-                await new Promise(r => setTimeout(r, attempt * 3000));
+                await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
             }
             try {
                 const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -2077,6 +2114,7 @@ async function openDocumentPiP() {
 
         updatePiPButtonState(true);
         pipWindow.addEventListener('pagehide', () => {
+            if (pipWindow?._dotInterval) clearInterval(pipWindow._dotInterval);
             pipWindow = null;
             pipCaptionEl = null;
             updatePiPButtonState(false);
@@ -2231,21 +2269,40 @@ function generateUUID() {
 
 function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
+let _compiledKB = null;
+let _saveKBTimer = null;
+
 function applyKnowledgeBase(text) {
     if (!(document.getElementById('autoCorrectEnabled')?.checked ?? true)) return text;
     const kb = getKnowledgeBase();
     if (!kb.corrections.length) return text;
+
+    if (!_compiledKB || _compiledKB.timestamp !== kb.updated) {
+        _compiledKB = {
+            timestamp: kb.updated,
+            corrections: [...kb.corrections]
+                .sort((a, b) => b.wrong.length - a.wrong.length)
+                .map(c => {
+                    const flags = c.caseSensitive ? 'g' : 'gi';
+                    const pattern = c.wholeWord ? '\\b' + escapeRegex(c.wrong) + '\\b' : escapeRegex(c.wrong);
+                    try { return { ...c, regex: new RegExp(pattern, flags) }; }
+                    catch (e) { return null; }
+                })
+                .filter(Boolean)
+        };
+    }
+
     let corrected = text;
-    [...kb.corrections].sort((a, b) => b.wrong.length - a.wrong.length).forEach(c => {
-        const flags = c.caseSensitive ? 'g' : 'gi';
-        const pattern = c.wholeWord ? '\\b' + escapeRegex(c.wrong) + '\\b' : escapeRegex(c.wrong);
-        try {
-            const regex = new RegExp(pattern, flags);
-            const before = corrected;
-            corrected = corrected.replace(regex, c.correct);
-            if (before !== corrected) { c.useCount = (c.useCount || 0) + 1; saveKnowledgeBase(); }
-        } catch (e) { /* skip bad regex */ }
+    let changed = false;
+    _compiledKB.corrections.forEach(c => {
+        const before = corrected;
+        corrected = corrected.replace(c.regex, c.correct);
+        if (before !== corrected) { c.useCount = (c.useCount || 0) + 1; changed = true; }
     });
+    if (changed) {
+        clearTimeout(_saveKBTimer);
+        _saveKBTimer = setTimeout(() => saveKnowledgeBase(), 2000);
+    }
     return corrected;
 }
 
@@ -2469,7 +2526,9 @@ function promptRenameSpeaker(id) {
 }
 
 function updateAllSpeakerLabels() {
-    meetingData.transcript.forEach(seg => { if (seg.speaker) renderSegmentWithSpeaker(seg.id); });
+    requestAnimationFrame(() => {
+        meetingData.transcript.forEach(seg => { if (seg.speaker) renderSegmentWithSpeaker(seg.id); });
+    });
 }
 
 // ==================== TRANSCRIPT EDITING ====================

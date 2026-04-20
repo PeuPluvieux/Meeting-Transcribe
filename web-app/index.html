@@ -73,8 +73,8 @@
         <!-- Header -->
         <header class="header">
             <div class="header-left">
-                <span class="header-logo-icon">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" style="width:20px;height:20px;color:var(--primary)">
+                <span class="header-logo-icon" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" style="width:20px;height:20px;color:var(--primary)" aria-hidden="true">
                         <path d="M8.25 4.5a3.75 3.75 0 117.5 0v8.25a3.75 3.75 0 11-7.5 0V4.5z"/>
                         <path d="M6 10.5a.75.75 0 01.75.75v1.5a5.25 5.25 0 1010.5 0v-1.5a.75.75 0 011.5 0v1.5a6.751 6.751 0 01-6 6.709v2.291h3a.75.75 0 010 1.5h-7.5a.75.75 0 010-1.5h3v-2.291a6.751 6.751 0 01-6-6.709v-1.5A.75.75 0 016 10.5z"/>
                     </svg>
@@ -142,7 +142,7 @@
                         <button class="btn btn-tiny btn-ghost" onclick="clearLiveTranscript()">Clear</button>
                     </div>
                 </div>
-                <div class="transcript-container" id="liveTranscript">
+                <div class="transcript-container" id="liveTranscript" role="status" aria-live="polite" aria-label="Live transcript">
                     <p class="placeholder">Transcript will appear here as you speak…</p>
                 </div>
             </div>
@@ -457,16 +457,16 @@
             </div>
             <div class="modal-body">
                 <div class="input-group">
-                    <label>Wrong Transcription</label>
+                    <label for="learnWrongText">Wrong Transcription</label>
                     <input type="text" id="learnWrongText" placeholder="Text to correct">
                 </div>
                 <div class="input-group">
-                    <label>Correct Text</label>
+                    <label for="learnCorrectText">Correct Text</label>
                     <input type="text" id="learnCorrectText" placeholder="The correct version">
                 </div>
                 <div class="settings-row-2col">
                     <div class="input-group">
-                        <label>Category</label>
+                        <label for="learnCategory">Category</label>
                         <select id="learnCategory">
                             <option value="name">Name</option>
                             <option value="company">Company</option>
