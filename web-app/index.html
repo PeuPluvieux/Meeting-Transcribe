@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="AI-powered meeting transcription and summarization. Real-time mic transcription, system audio capture, multilingual translation, and smart summaries.">
     <title>Meeting Notes AI</title>
-    <link rel="stylesheet" href="styles.css?v=8.0">
+    <link rel="stylesheet" href="styles.css?v=9.0">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -252,9 +252,14 @@
                         <label for="translationProvider">Provider</label>
                         <select id="translationProvider" onchange="onTranslationProviderChange()">
                             <option value="google">Google Translate (Free, Fast)</option>
+                            <option value="claude">Claude AI (MiTAC QA Mode — Best)</option>
                             <option value="ollama">Ollama LLM (Local, Better Context)</option>
                         </select>
                         <small id="translationProviderHint">Google is fast. Ollama handles incomplete sentences and context better.</small>
+                    </div>
+                    <div id="claudeTranslationInfo" class="info-box" style="display:none;">
+                        <span class="info-icon">✨</span>
+                        <div class="info-content"><strong>Claude AI Translation</strong> — Cleans filler words, handles mixed Mandarin/English, preserves MiTAC QA terms. Segments appear <span style="color:#9CA3AF;">gray</span> while processing, then turn black when done. Requires Anthropic API key below.</div>
                     </div>
                     <div id="ollamaTranslationInfo" class="info-box" style="display:none;">
                         <span class="info-icon">🤖</span>
@@ -340,6 +345,25 @@
                     </div>
                 </div>
 
+                <hr class="settings-divider">
+
+                <!-- Storage / Auto-cleanup -->
+                <div class="settings-section">
+                    <h4 class="settings-section-title">Storage</h4>
+                    <div class="input-group checkbox-group">
+                        <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                            <input type="checkbox" id="autoCleanupEnabled">
+                            Auto-delete oldest meetings — keep last
+                            <select id="autoCleanupLimit" style="width:auto;padding:2px 6px;font-size:.85rem;">
+                                <option value="5">5</option>
+                                <option value="10" selected>10</option>
+                                <option value="20">20</option>
+                            </select>
+                            meetings
+                        </label>
+                    </div>
+                </div>
+
                 <button class="btn btn-primary" onclick="saveSettings()" style="width:100%;margin-top:16px;">Save Settings</button>
             </div>
         </div>
@@ -370,6 +394,8 @@
                         <span class="edit-hint">Double-click to edit</span>
                         <button class="btn btn-small" onclick="copyToClipboard('transcript')">📋 Copy</button>
                         <button class="btn btn-small" onclick="downloadFile('transcript')">⬇️ Download</button>
+                        <button class="btn btn-small btn-primary" onclick="saveToClaudeProject()" title="Download transcript file + open Claude Project">↗ Save to Claude Project</button>
+                        <button class="btn btn-small btn-ghost" onclick="resetClaudeProjectUrl()" title="Change Claude Project URL">✏</button>
                     </div>
                 </div>
                 <div class="content-body" id="transcriptContent"></div>
@@ -397,6 +423,7 @@
 
             <div class="download-all">
                 <button class="btn btn-primary" onclick="saveCurrentMeeting()">💾 Save Meeting</button>
+                <button class="btn btn-secondary" onclick="exportMeetingMarkdown()">📤 Export Markdown</button>
                 <button class="btn btn-secondary" onclick="downloadAll()">⬇️ Download All</button>
                 <button class="btn btn-secondary" onclick="startNewMeeting()">🔄 New Meeting</button>
             </div>
@@ -412,7 +439,7 @@
         </div>
 
         <footer class="footer">
-            <p>Meeting Notes AI v8.0 &mdash; Powered by Groq Whisper &amp; Groq AI</p>
+            <p>Meeting Notes AI v9.0 &mdash; Powered by Groq Whisper &amp; Claude AI</p>
             <p>By: Patrick Parco</p>
         </footer>
     </div>
@@ -494,6 +521,6 @@
     </div>
     </main>
 
-    <script src="app.js?v=8.0" defer></script>
+    <script src="app.js?v=9.0" defer></script>
 </body>
 </html>

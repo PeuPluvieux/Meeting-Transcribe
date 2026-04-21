@@ -548,6 +548,11 @@ body {
 
 .final-span {
     color: inherit;
+    transition: color 0.5s ease;
+}
+
+.seg-pending {
+    color: #9CA3AF;
 }
 
 .interim-span {

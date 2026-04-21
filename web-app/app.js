@@ -83,6 +83,32 @@ RESPOND ONLY with valid JSON — no markdown, no code fences, no explanation, ju
   "nextSteps": ["Follow-up action or pending item with owner and timing where known"]
 }`;
 
+// ==================== CLAUDE PER-SEGMENT TRANSLATION PROMPT ====================
+// Used by claudeTranslateSegment() — live translation of individual Whisper segments
+const MITAC_SEGMENT_TRANSLATE_PROMPT = `You are a professional translator and quality engineering assistant at MiTAC Computing Technology, a server/rack manufacturing company in Taiwan.
+
+You will receive raw speech-to-text segments from internal engineering meetings. These segments often contain:
+- Mixed Mandarin Chinese, English, and Taiwanese Hokkien mid-sentence
+- Manufacturing and QA jargon
+
+Your job:
+1. Clean up the segment — remove filler words, fix broken words from poor transcription
+2. Translate everything into clear, natural English
+3. Preserve these technical terms exactly as-is (do not translate them):
+   OQC, IPQC, DPPM, MDI, NCR, CAPA, FAI, BOM, BMC, iDRAC, RAID, PSU, NIC,
+   PCIe, DIMM, PTU, PN, SN, PA, ZOU, HOU, MIS QA, Rittal, Oracle, L11, MCT
+4. Output ONLY the cleaned English translation. No explanations, no labels.`;
+
+// ==================== CHUNKED SUMMARIZATION PROMPTS ====================
+// Used by analyzeWithAnthropic() for long meetings
+const CHUNK_SUMMARY_SYSTEM = `You are an expert meeting analyst for MiTAC Computing Technology manufacturing QA meetings.
+Analyze the given meeting section and output ONLY valid JSON, no markdown, no code fences:
+{"summary": "2-3 paragraphs of key discussion points", "decisions": ["decision 1", "..."], "action_items": [{"task": "...", "owner": "...", "notes": "..."}]}`;
+
+const MERGE_SUMMARY_SYSTEM = `You are consolidating partial summaries from different sections of a long manufacturing QA meeting.
+Output ONLY valid JSON, no markdown, no code fences:
+{"final_summary": "3-5 comprehensive paragraphs covering all topics", "key_decisions": ["decision 1", "..."], "all_action_items": [{"task": "...", "owner": "...", "notes": "..."}]}`;
+
 // ==================== OLLAMA ====================
 const OLLAMA_API = 'http://localhost:11434';
 let ollamaConnected = false;
@@ -602,13 +628,18 @@ function onLLMProviderChange() {
 
 function onTranslationProviderChange() {
     const provider = document.getElementById('translationProvider')?.value;
-    const infoEl = document.getElementById('ollamaTranslationInfo');
+    const ollamaInfo = document.getElementById('ollamaTranslationInfo');
+    const claudeInfo = document.getElementById('claudeTranslationInfo');
     const hintEl = document.getElementById('translationProviderHint');
-    if (infoEl) infoEl.style.display = provider === 'ollama' ? 'block' : 'none';
+    if (ollamaInfo) ollamaInfo.style.display = provider === 'ollama' ? 'block' : 'none';
+    if (claudeInfo) claudeInfo.style.display = provider === 'claude' ? 'block' : 'none';
     if (hintEl) {
-        hintEl.textContent = provider === 'ollama'
-            ? 'Ollama handles incomplete sentences and meeting context better. Requires Ollama running.'
-            : 'Google is fast. Ollama handles incomplete sentences and context better.';
+        const hints = {
+            google: 'Google is fast. Ollama handles incomplete sentences and context better.',
+            claude: 'Claude cleans + translates each segment in real-time. Requires your Anthropic API key.',
+            ollama: 'Ollama handles incomplete sentences and meeting context better. Requires Ollama running.'
+        };
+        hintEl.textContent = hints[provider] || hints.google;
     }
     localStorage.setItem('translation_provider', provider);
 }
@@ -815,22 +846,48 @@ function addTranscriptSegment(text, source = 'mic') {
 
     const tgtLang = localStorage.getItem('target_lang') || 'en';
     const srcLang = seg.language || globalSrcLang;
+    const translationProvider = localStorage.getItem('translation_provider') || 'google';
+    const anthropicKey = localStorage.getItem('anthropic_api_key');
+
     if (tgtLang !== 'none') {
         const segmentId = seg.id;
-        translateText(displayText, srcLang, tgtLang).then(tr => {
-            if (tr) {
-                seg.translated = tr;
-                const el = document.getElementById('trans-' + segmentId);
-                if (el && document.contains(el)) updateSegmentTranslation(segmentId, tr);
-            } else {
+
+        if (translationProvider === 'claude' && anthropicKey) {
+            // Gray-to-black: mark segment as pending, fire Claude per-segment call
+            const segSpan = document.getElementById('seg-' + segmentId);
+            if (segSpan) segSpan.classList.add('seg-pending');
+            const transEl = document.getElementById('trans-' + segmentId);
+            if (transEl) transEl.innerHTML = ''; // suppress the "…" placeholder
+
+            claudeTranslateSegment(displayText).then(result => {
+                const span = document.getElementById('seg-' + segmentId);
+                if (span) {
+                    span.classList.remove('seg-pending');
+                    if (result) {
+                        span.textContent = result + ' ';
+                        seg.translated = result;
+                    }
+                }
+            }).catch(() => {
+                const span = document.getElementById('seg-' + segmentId);
+                if (span) span.classList.remove('seg-pending');
+            });
+        } else {
+            translateText(displayText, srcLang, tgtLang).then(tr => {
+                if (tr) {
+                    seg.translated = tr;
+                    const el = document.getElementById('trans-' + segmentId);
+                    if (el && document.contains(el)) updateSegmentTranslation(segmentId, tr);
+                } else {
+                    const el = document.getElementById('trans-' + segmentId);
+                    if (el) el.style.display = 'none';
+                }
+            }).catch(err => {
+                console.debug('[Translation] error for seg', segmentId, err);
                 const el = document.getElementById('trans-' + segmentId);
                 if (el) el.style.display = 'none';
-            }
-        }).catch(err => {
-            console.debug('[Translation] error for seg', segmentId, err);
-            const el = document.getElementById('trans-' + segmentId);
-            if (el) el.style.display = 'none';
-        });
+            });
+        }
     } else {
         const el = document.getElementById('trans-' + seg.id);
         if (el) el.style.display = 'none';
@@ -1236,6 +1293,7 @@ async function processRecording() {
                 if (item.owner || item.Owner) parts.push('Owner: ' + (item.owner || item.Owner));
                 if (item.deadline || item.Deadline) parts.push('Deadline: ' + (item.deadline || item.Deadline));
                 if (item.context || item.Context) parts.push('Context: ' + (item.context || item.Context));
+                if (item.notes || item.Notes) parts.push('Notes: ' + (item.notes || item.Notes));
                 if (parts.length) return parts.join(' — ');
                 // Generic object: flatten to readable string
                 return Object.entries(item).map(([k, v]) => `${k}: ${v}`).join(' — ');
@@ -1325,9 +1383,82 @@ async function analyzeWithOpenAI(text) {
 // ── Claude / Anthropic pipeline (MiTAC QA context) ──────────────────────────
 
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
-// Max chars per Claude call. claude-sonnet-4-6 has 200k token context; we stay
-// well under that (~50k tokens) so the response has plenty of room too.
+// Per-segment live translation model — smaller/faster for real-time use
+const CLAUDE_TRANSLATE_MODEL = 'claude-sonnet-4-5-20250514';
+// Chunk size for long-meeting summarization (~3000 tokens ≈ 12000 chars)
+const CLAUDE_CHUNK_CHARS = 12000;
+// Legacy constant kept for any code that references it
 const CLAUDE_MAX_CHUNK_CHARS = 120000;
+
+/**
+ * Translate/clean a single live transcript segment using Claude.
+ * Returns cleaned English text or null on failure.
+ * Gray-to-black UX: caller marks span as seg-pending before calling; removes on resolution.
+ */
+async function claudeTranslateSegment(text) {
+    const key = localStorage.getItem('anthropic_api_key');
+    if (!key || !text?.trim()) return null;
+    try {
+        const resp = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+                'x-api-key': key,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+                'anthropic-dangerous-direct-browser-access': 'true'
+            },
+            body: JSON.stringify({
+                model: CLAUDE_TRANSLATE_MODEL,
+                max_tokens: 512,
+                system: MITAC_SEGMENT_TRANSLATE_PROMPT,
+                messages: [{ role: 'user', content: text }]
+            }),
+            signal: AbortSignal.timeout(15000)
+        });
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        const result = data.content?.[0]?.text?.trim();
+        return result || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Split transcript text into chunks at sentence boundaries.
+ * Ensures no chunk exceeds maxChars; prefers splitting after .!?。？！ punctuation.
+ */
+function splitIntoChunks(text, maxChars = CLAUDE_CHUNK_CHARS) {
+    if (text.length <= maxChars) return [text];
+    const chunks = [];
+    let pos = 0;
+    while (pos < text.length) {
+        if (pos + maxChars >= text.length) {
+            chunks.push(text.slice(pos).trim());
+            break;
+        }
+        // Search backward from target end for a sentence boundary
+        const searchEnd = pos + maxChars;
+        const searchStart = pos + Math.floor(maxChars * 0.5);
+        let boundary = -1;
+        for (let i = searchEnd; i >= searchStart; i--) {
+            if (/[.!?。？！…]/.test(text[i])) {
+                const next = text[i + 1];
+                if (!next || /\s/.test(next)) { boundary = i + 1; break; }
+            }
+        }
+        if (boundary > pos) {
+            chunks.push(text.slice(pos, boundary).trim());
+            pos = boundary;
+        } else {
+            const lastSpace = text.lastIndexOf(' ', pos + maxChars);
+            if (lastSpace > pos) { chunks.push(text.slice(pos, lastSpace).trim()); pos = lastSpace + 1; }
+            else { chunks.push(text.slice(pos, pos + maxChars)); pos += maxChars; }
+        }
+        while (pos < text.length && /\s/.test(text[pos])) pos++;
+    }
+    return chunks.filter(c => c.trim().length > 0);
+}
 
 /**
  * Call Claude API once with retry on transient errors (rate-limit, overload, timeout).
@@ -1395,59 +1526,52 @@ async function _claudeAPICall(key, systemPrompt, userContent, timeoutMs = 120000
 
 /**
  * Main Anthropic/Claude analysis function.
- * Uses MITAC_SYSTEM_PROMPT for context-aware cleaning, translation, and analysis.
- * Chunks transcripts that exceed CLAUDE_MAX_CHUNK_CHARS.
+ * Short meetings (≤ CLAUDE_CHUNK_CHARS): single comprehensive call with MITAC_SYSTEM_PROMPT.
+ * Long meetings: sentence-boundary chunking → per-chunk extraction → final merge.
  */
 async function analyzeWithAnthropic(text) {
     const key = localStorage.getItem('anthropic_api_key');
     if (!key) throw new Error('Anthropic API key not configured. Add it in Settings.');
 
-    // ── Short transcript: single call ────────────────────────────────────────
-    if (text.length <= CLAUDE_MAX_CHUNK_CHARS) {
+    const chunks = splitIntoChunks(text, CLAUDE_CHUNK_CHARS);
+
+    // ── Short meeting: single comprehensive call ──────────────────────────────
+    if (chunks.length === 1) {
         showProcessingOverlay(true, 'Cleaning & translating transcript with Claude…');
         const parsed = await _claudeAPICall(key, MITAC_SYSTEM_PROMPT,
             'Meeting transcript:\n\n' + text);
         return _mapClaudeResponse(parsed);
     }
 
-    // ── Long transcript: chunk → partial summaries → synthesize ──────────────
-    const chunks = [];
-    for (let i = 0; i < text.length; i += CLAUDE_MAX_CHUNK_CHARS) {
-        chunks.push(text.slice(i, i + CLAUDE_MAX_CHUNK_CHARS));
-    }
-    showProcessingOverlay(true, `Long meeting — processing ${chunks.length} chunks with Claude…`);
+    // ── Long meeting: chunk → summarize each → merge ──────────────────────────
+    showProcessingOverlay(true, `Long meeting (${chunks.length} sections) — summarizing with Claude…`);
 
     const partials = [];
     for (let i = 0; i < chunks.length; i++) {
-        showProcessingOverlay(true, `Claude: analyzing chunk ${i + 1} of ${chunks.length}…`);
-        const p = await _claudeAPICall(key, MITAC_SYSTEM_PROMPT,
-            `PARTIAL TRANSCRIPT (section ${i + 1} of ${chunks.length}):\n\n` + chunks[i]);
+        showProcessingOverlay(true, `Claude: analyzing section ${i + 1} of ${chunks.length}…`);
+        const p = await _claudeAPICall(
+            key,
+            CHUNK_SUMMARY_SYSTEM,
+            `Meeting section ${i + 1} of ${chunks.length}:\n\n${chunks[i]}`
+        );
         partials.push(p);
     }
 
-    // Combine into a final synthesis pass
-    showProcessingOverlay(true, 'Claude: synthesizing full meeting analysis…');
-    const combinedSummaries = partials.map((p, i) =>
-        `[Section ${i + 1}]\n${p.summary || '(no summary)'}`
-    ).join('\n\n');
+    // ── Final merge pass ──────────────────────────────────────────────────────
+    showProcessingOverlay(true, 'Claude: consolidating full meeting summary…');
+    const mergeInput = partials.map((p, i) =>
+        `[Section ${i + 1}]\nSummary: ${p.summary || ''}\nDecisions: ${JSON.stringify(p.decisions || [])}\nAction Items: ${JSON.stringify(p.action_items || [])}`
+    ).join('\n\n---\n\n');
 
-    const synthPrompt = `You are synthesizing ${chunks.length} partial summaries of a single MiTAC QA meeting into one cohesive final analysis. Combine them without duplication. Output valid JSON with the same schema (no cleaned_transcript needed):\n\n${combinedSummaries}`;
-    const synth = await _claudeAPICall(key, MITAC_SYSTEM_PROMPT, synthPrompt);
-
-    // Merge action items and key points from all partials
-    const allActionItems = partials.flatMap(p => p.actionItems || p.action_items || []);
-    const allKeyPoints   = partials.flatMap(p => p.keyPoints || []);
-    const allDecisions   = partials.flatMap(p => p.keyDecisions || []);
-    const allNextSteps   = partials.flatMap(p => p.nextSteps || []);
-    const allTranscripts = partials.map(p => p.cleaned_transcript || '').filter(Boolean).join('\n\n');
+    const merged = await _claudeAPICall(key, MERGE_SUMMARY_SYSTEM, mergeInput);
 
     return {
-        summary:          synth.summary          || partials.map(p => p.summary || '').join('\n\n'),
-        keyPoints:        synth.keyPoints         || allKeyPoints,
-        keyDecisions:     synth.keyDecisions      || allDecisions,
-        actionItems:      synth.actionItems       || allActionItems,
-        nextSteps:        synth.nextSteps         || allNextSteps,
-        cleaned_transcript: allTranscripts
+        summary:      merged.final_summary  || partials.map(p => p.summary || '').join('\n\n'),
+        keyPoints:    [],
+        keyDecisions: merged.key_decisions  || partials.flatMap(p => p.decisions || []),
+        actionItems:  merged.all_action_items || partials.flatMap(p => p.action_items || []),
+        nextSteps:    [],
+        cleaned_transcript: null
     };
 }
 
@@ -1793,6 +1917,9 @@ function saveSettings() {
     if (geminiKey) localStorage.setItem('gemini_api_key', geminiKey);
     else localStorage.removeItem('gemini_api_key');
 
+    localStorage.setItem('auto_cleanup_enabled', document.getElementById('autoCleanupEnabled')?.checked ? 'true' : 'false');
+    localStorage.setItem('auto_cleanup_limit', document.getElementById('autoCleanupLimit')?.value || '10');
+
     showToast('Settings saved!', 'success');
     toggleSettings();
 }
@@ -1828,6 +1955,11 @@ function loadSettings() {
     const modeSelect = document.getElementById('transcriptDisplayMode');
     if (modeSelect) modeSelect.value = displayMode;
     setTranscriptDisplayMode(displayMode);
+
+    const autoCleanup = localStorage.getItem('auto_cleanup_enabled') === 'true';
+    if (document.getElementById('autoCleanupEnabled')) document.getElementById('autoCleanupEnabled').checked = autoCleanup;
+    const cleanupLimit = localStorage.getItem('auto_cleanup_limit') || '10';
+    if (document.getElementById('autoCleanupLimit')) document.getElementById('autoCleanupLimit').value = cleanupLimit;
 
     getKnowledgeBase();
     updateKBStats();
@@ -2155,6 +2287,90 @@ function downloadAll() {
     const content = `# Meeting Notes - ${ts}\n\n${generateSummaryMarkdown()}\n\n---\n\n${generateActionsMarkdown()}\n\n---\n\n${generateTranscriptMarkdown()}`;
     downloadBlob(content, `meeting_notes_${ts}.md`, 'text/markdown');
     showToast('Downloaded meeting notes', 'success');
+}
+
+// ==================== CLAUDE PROJECT EXPORT ====================
+
+function buildProjectTranscriptMd() {
+    const title = document.getElementById('meetingTitle')?.value?.trim() || 'Untitled Meeting';
+    const date = new Date().toISOString().slice(0, 10);
+    let md = `# ${title}\nDate: ${date}\n\n---\n\n`;
+    meetingData.transcript.forEach(seg => {
+        const text = seg.corrected || seg.original;
+        md += `[${seg.timestamp}] ${text}\n\n`;
+    });
+    return md;
+}
+
+function saveToClaudeProject() {
+    let url = localStorage.getItem('claude_project_url');
+    if (!url) {
+        url = window.prompt('Paste your Claude Project URL (e.g. https://claude.ai/project/…):');
+        if (!url) return;
+        url = url.trim();
+        if (!url.startsWith('https://claude.ai')) {
+            showToast('Invalid URL — must start with https://claude.ai', 'error');
+            return;
+        }
+        localStorage.setItem('claude_project_url', url);
+    }
+    const title = (document.getElementById('meetingTitle')?.value?.trim() || 'Meeting').replace(/[\\/:*?"<>|]/g, '_');
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `${title}_${date}.md`;
+    downloadBlob(buildProjectTranscriptMd(), filename, 'text/markdown');
+    window.open(url, '_blank');
+    showToast('Transcript saved! Upload the file to your Claude Project.', 'success');
+}
+
+function resetClaudeProjectUrl() {
+    const url = window.prompt('Paste your Claude Project URL:', localStorage.getItem('claude_project_url') || '');
+    if (!url) return;
+    const trimmed = url.trim();
+    if (!trimmed.startsWith('https://claude.ai')) { showToast('Invalid URL — must start with https://claude.ai', 'error'); return; }
+    localStorage.setItem('claude_project_url', trimmed);
+    showToast('Claude Project URL updated!', 'success');
+}
+
+// ==================== AUTO CLEANUP ====================
+
+async function autoCleanupMeetings() {
+    if (localStorage.getItem('auto_cleanup_enabled') !== 'true') return;
+    const limit = parseInt(localStorage.getItem('auto_cleanup_limit') || '10');
+    try {
+        const all = await getAllMeetings(); // newest-first
+        const toDelete = all.slice(limit);
+        for (const m of toDelete) await deleteMeeting(m.id);
+        if (toDelete.length) renderMeetingHistory();
+    } catch (e) {
+        console.warn('[AutoCleanup] failed:', e);
+    }
+}
+
+function exportMeetingMarkdown() {
+    const ts = new Date().toISOString().slice(0, 10);
+    const title = document.getElementById('meetingTitle')?.value || 'Meeting';
+    let md = `# ${title}\n\n**Date:** ${new Date().toLocaleDateString()}\n\n---\n\n`;
+    md += `## Summary\n\n${meetingData.summary || '(none)'}\n\n`;
+    if (meetingData.keyDecisions?.length) {
+        md += `## Key Decisions\n\n${meetingData.keyDecisions.map(d => `- ${d}`).join('\n')}\n\n`;
+    }
+    if (meetingData.actionItems?.length) {
+        md += `## Action Items\n\n`;
+        meetingData.actionItems.forEach((item, i) => {
+            const parsed = parseActionItem(item);
+            const checked = meetingData.actionItemsChecked?.includes(i) ? 'x' : ' ';
+            md += `- [${checked}] **${parsed.task}**`;
+            if (parsed.owner) md += ` · Owner: ${parsed.owner}`;
+            if (parsed.deadline) md += ` · Deadline: ${parsed.deadline}`;
+            md += '\n';
+        });
+        md += '\n';
+    }
+    if (meetingData.keyPoints?.length) {
+        md += `## Key Points\n\n${meetingData.keyPoints.map(p => `- ${p}`).join('\n')}\n\n`;
+    }
+    downloadBlob(md, `${title.replace(/\s+/g, '_')}_${ts}.md`, 'text/markdown');
+    showToast('Exported markdown!', 'success');
 }
 
 function generateTranscriptMarkdown() {
@@ -2747,6 +2963,7 @@ async function saveCurrentMeeting() {
         await saveMeeting(meeting);
         currentMeetingId = id;
         showToast('Meeting saved!', 'success');
+        autoCleanupMeetings();
     } catch (e) {
         showToast('Failed to save meeting', 'error');
     }
