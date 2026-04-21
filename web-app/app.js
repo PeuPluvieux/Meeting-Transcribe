@@ -1,6 +1,6 @@
 // ============================================================
-// Meeting Notes AI v8.0
-// Web Speech API (mic) + System Audio via Groq Whisper
+// Meeting Notes AI v9.1
+// Mic: Web Speech API OR Gladia (switchable) + System Audio via Groq Whisper
 // ============================================================
 
 // ==================== DEFAULT CONFIG ====================
@@ -131,6 +131,15 @@ let systemAudioChunks = [];
 let systemAudioChunkTimer = null;
 let systemAudioChunkStartTime = null;
 const SYSTEM_AUDIO_CHUNK_MS = 12000; // 12s chunks
+
+// ==================== GLADIA MIC STATE ====================
+let gladiaWs = null;
+let gladiaMicStream = null;
+let gladiaAudioCtx = null;
+let gladiaProcessor = null;
+let gladiaActive = false;
+
+function getMicProvider() { return localStorage.getItem('mic_provider') || 'webspeech'; }
 
 function checkSpeechSupport() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -441,6 +450,114 @@ async function handleAddMeetingAudio() {
     if (systemAudioActive) { stopSystemAudioCapture(); return; }
     if (appState !== 'recording') { showToast('Start recording first, then add meeting audio.', 'info'); return; }
     await startSystemAudioCapture();
+}
+
+// ==================== GLADIA MIC TRANSCRIPTION ====================
+async function startGladiaMic() {
+    const apiKey = localStorage.getItem('gladia_api_key');
+    if (!apiKey) {
+        showToast('Add your Gladia API key in Settings to use Gladia mic transcription.', 'warning');
+        return false;
+    }
+    try {
+        const resp = await fetch('https://api.gladia.io/v2/live', {
+            method: 'POST',
+            headers: { 'x-gladia-key': apiKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                encoding: 'wav/pcm', bit_depth: 16, sample_rate: 16000, channels: 1,
+                language_config: { languages: [], code_switching: true }
+            })
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            showToast('Gladia init failed: ' + (err.message || resp.status), 'error');
+            return false;
+        }
+        const { url } = await resp.json();
+
+        gladiaMicStream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+        });
+
+        gladiaAudioCtx = new AudioContext({ sampleRate: 16000 });
+        const source = gladiaAudioCtx.createMediaStreamSource(gladiaMicStream);
+        gladiaProcessor = gladiaAudioCtx.createScriptProcessor(4096, 1, 1);
+        gladiaProcessor.onaudioprocess = (e) => {
+            if (!gladiaWs || gladiaWs.readyState !== WebSocket.OPEN) return;
+            const f32 = e.inputBuffer.getChannelData(0);
+            const i16 = new Int16Array(f32.length);
+            for (let i = 0; i < f32.length; i++) i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32767));
+            gladiaWs.send(i16.buffer);
+        };
+        source.connect(gladiaProcessor);
+        gladiaProcessor.connect(gladiaAudioCtx.destination);
+
+        gladiaWs = new WebSocket(url);
+        gladiaWs.onopen = () => { gladiaActive = true; updateMicStatus('listening'); };
+        gladiaWs.onmessage = (e) => {
+            try {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'transcript' && msg.data?.is_final && msg.data?.utterance?.text?.trim()) {
+                    addTranscriptSegment(msg.data.utterance.text.trim(), 'mic');
+                }
+            } catch (_) {}
+        };
+        gladiaWs.onerror = () => showToast('Gladia mic error — check your API key.', 'error');
+        gladiaWs.onclose = () => {
+            gladiaActive = false;
+            updateMicStatus(appState === 'recording' ? 'reconnecting' : 'idle');
+        };
+        return true;
+    } catch (e) {
+        if (e.name === 'NotAllowedError') showToast('Microphone permission denied.', 'error');
+        else showToast('Could not start Gladia mic: ' + e.message, 'error');
+        console.error('[Gladia]', e);
+        return false;
+    }
+}
+
+function stopGladiaMic() {
+    if (gladiaWs) {
+        try { if (gladiaWs.readyState === WebSocket.OPEN) gladiaWs.send(JSON.stringify({ type: 'stop_recording' })); gladiaWs.close(); } catch (_) {}
+        gladiaWs = null;
+    }
+    if (gladiaProcessor) { try { gladiaProcessor.disconnect(); } catch (_) {} gladiaProcessor = null; }
+    if (gladiaAudioCtx) { try { gladiaAudioCtx.close(); } catch (_) {} gladiaAudioCtx = null; }
+    if (gladiaMicStream) { gladiaMicStream.getTracks().forEach(t => t.stop()); gladiaMicStream = null; }
+    gladiaActive = false;
+    updateMicStatus('idle');
+}
+
+function pauseGladiaMic() {
+    if (gladiaProcessor) { try { gladiaProcessor.disconnect(); } catch (_) {} }
+    updateMicStatus('paused');
+}
+
+async function resumeGladiaMic() {
+    if (gladiaMicStream && gladiaAudioCtx && gladiaWs?.readyState === WebSocket.OPEN) {
+        const source = gladiaAudioCtx.createMediaStreamSource(gladiaMicStream);
+        gladiaProcessor = gladiaAudioCtx.createScriptProcessor(4096, 1, 1);
+        gladiaProcessor.onaudioprocess = (e) => {
+            if (!gladiaWs || gladiaWs.readyState !== WebSocket.OPEN) return;
+            const f32 = e.inputBuffer.getChannelData(0);
+            const i16 = new Int16Array(f32.length);
+            for (let i = 0; i < f32.length; i++) i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32767));
+            gladiaWs.send(i16.buffer);
+        };
+        source.connect(gladiaProcessor);
+        gladiaProcessor.connect(gladiaAudioCtx.destination);
+        updateMicStatus('listening');
+    } else {
+        stopGladiaMic();
+        await startGladiaMic();
+    }
+}
+
+function onMicProviderChange() {
+    const provider = document.getElementById('micProvider')?.value || 'webspeech';
+    const gladiaSection = document.getElementById('gladiaSettings');
+    if (gladiaSection) gladiaSection.style.display = provider === 'gladia' ? 'block' : 'none';
+    onSourceLangChange();
 }
 
 // ==================== TRANSLATION ====================
@@ -1110,7 +1227,8 @@ function handleRecordButton() {
 }
 
 async function startRecording() {
-    if (!checkSpeechSupport()) return;
+    const micProvider = getMicProvider();
+    if (micProvider === 'webspeech' && !checkSpeechSupport()) return;
     if (appState === 'done') {
         meetingData = { transcript: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [] };
         currentSegmentId = 0; currentMeetingId = null;
@@ -1125,8 +1243,7 @@ async function startRecording() {
     if (badge) badge.style.display = 'inline-flex';
     const dot = document.getElementById('overlayRecDot');
     if (dot) dot.classList.add('active');
-    // Start recognition last — state is already 'recording' so onresult won't drop results
-    const started = await startSpeechRecognition();
+    const started = micProvider === 'gladia' ? await startGladiaMic() : await startSpeechRecognition();
     if (!started) {
         setAppState('idle');
         stopTimer();
@@ -1138,7 +1255,7 @@ async function startRecording() {
 function pauseRecording() {
     if (appState !== 'recording') return;
 
-    pauseSpeechRecognition();
+    if (getMicProvider() === 'gladia') pauseGladiaMic(); else pauseSpeechRecognition();
 
     pauseStartTime = Date.now();
     setAppState('paused');
@@ -1162,7 +1279,7 @@ async function resumeRecording() {
     setAppState('recording');
     startTimer();
 
-    await resumeSpeechRecognition();
+    if (getMicProvider() === 'gladia') await resumeGladiaMic(); else await resumeSpeechRecognition();
 
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'inline-flex';
@@ -1175,7 +1292,7 @@ async function stopRecording() {
     if (appState !== 'recording' && appState !== 'paused') return;
     if (appState === 'paused' && pauseStartTime) { pausedDuration += Date.now() - pauseStartTime; pauseStartTime = null; }
     setAppState('stopping');
-    stopSpeechRecognition();
+    if (getMicProvider() === 'gladia') stopGladiaMic(); else stopSpeechRecognition();
     stopSystemAudioCapture();
     await new Promise(r => setTimeout(r, 500));
     const badge = document.getElementById('micBadge');
@@ -1894,7 +2011,13 @@ function loadTheme() {
 function onSourceLangChange() {
     const val = document.getElementById('sourceLang')?.value || '';
     const hint = document.getElementById('bilingualHint');
-    if (hint) hint.style.display = val.includes('+') ? 'block' : 'none';
+    if (!hint) return;
+    if (!val.includes('+')) { hint.style.display = 'none'; return; }
+    const micProv = document.getElementById('micProvider')?.value || 'webspeech';
+    hint.style.display = 'block';
+    hint.innerHTML = micProv === 'gladia'
+        ? '✅ Gladia handles Mandarin-English code-switching natively — real-time.'
+        : '💡 Mixed mode works best with <strong>Add Meeting Audio</strong> (Groq Whisper). Mic alone has limited code-switching accuracy.';
 }
 
 function saveSettings() {
@@ -1910,6 +2033,10 @@ function saveSettings() {
     const groqKey = document.getElementById('groqApiKey')?.value || '';
     if (groqKey) localStorage.setItem('groq_api_key', groqKey);
     else localStorage.removeItem('groq_api_key');
+    const gladiaKey = document.getElementById('gladiaApiKey')?.value || '';
+    if (gladiaKey) localStorage.setItem('gladia_api_key', gladiaKey);
+    else localStorage.removeItem('gladia_api_key');
+    localStorage.setItem('mic_provider', document.getElementById('micProvider')?.value || 'webspeech');
     const anthropicKey = document.getElementById('anthropicKey')?.value || '';
     if (anthropicKey) localStorage.setItem('anthropic_api_key', anthropicKey);
     else localStorage.removeItem('anthropic_api_key');
@@ -1946,6 +2073,10 @@ function loadSettings() {
 
     const groqApiKey = localStorage.getItem('groq_api_key') || '';
     if (document.getElementById('groqApiKey')) document.getElementById('groqApiKey').value = groqApiKey;
+    const gladiaApiKey = localStorage.getItem('gladia_api_key') || '';
+    if (document.getElementById('gladiaApiKey')) document.getElementById('gladiaApiKey').value = gladiaApiKey;
+    const micProv = localStorage.getItem('mic_provider') || 'webspeech';
+    if (document.getElementById('micProvider')) { document.getElementById('micProvider').value = micProv; onMicProviderChange(); }
     const anthropicApiKey = localStorage.getItem('anthropic_api_key') || '';
     if (document.getElementById('anthropicKey')) document.getElementById('anthropicKey').value = anthropicApiKey;
     const geminiApiKey = localStorage.getItem('gemini_api_key') || '';
@@ -1970,7 +2101,7 @@ function startNewMeeting() {
     if (appState === 'recording' || appState === 'paused') {
         if (!confirm('Stop current recording and start a new meeting?')) return;
         flushSpeechBuffer();
-        stopSpeechRecognition();
+        if (getMicProvider() === 'gladia') stopGladiaMic(); else stopSpeechRecognition();
         stopSystemAudioCapture();
         stopTimer();
     }

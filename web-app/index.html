@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="AI-powered meeting transcription and summarization. Real-time mic transcription, system audio capture, multilingual translation, and smart summaries.">
     <title>Meeting Notes AI</title>
-    <link rel="stylesheet" href="styles.css?v=9.0">
+    <link rel="stylesheet" href="styles.css?v=9.1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -211,9 +211,17 @@
                 <div class="settings-section">
                     <div class="settings-section-label">Transcription</div>
 
+                    <div class="input-group" style="margin-bottom:8px;">
+                        <label for="micProvider">Mic Transcription Provider</label>
+                        <select id="micProvider" onchange="onMicProviderChange()">
+                            <option value="webspeech">Web Speech API (Default, Chrome/Edge)</option>
+                            <option value="gladia">Gladia — Best for Mandarin+English</option>
+                        </select>
+                    </div>
+
                     <div class="info-box info-box-webspeech">
                         <div class="info-box-header">
-                            <span>🎙️ <strong>Web Speech API</strong></span>
+                            <span>🎙️ <strong>Mic Status</strong></span>
                             <div class="mic-status-row">
                                 <span class="mic-status-dot" id="micStatusDot"></span>
                                 <span id="micStatusText">Ready</span>
@@ -303,6 +311,14 @@
                             <label for="groqApiKey">Groq API Key</label>
                             <input type="password" id="groqApiKey" placeholder="gsk_..." style="width:100%;" onchange="saveSettings()">
                             <p class="settings-hint">Free — get your key at <strong>console.groq.com</strong> (no credit card needed)</p>
+                        </div>
+                    </div>
+                    <!-- Gladia Settings -->
+                    <div id="gladiaSettings" style="display:none;">
+                        <div class="input-group">
+                            <label for="gladiaApiKey">Gladia API Key</label>
+                            <input type="password" id="gladiaApiKey" placeholder="your-gladia-key" style="width:100%;" onchange="saveSettings()">
+                            <p class="settings-hint">Free 10 hrs/month — get your key at <strong>app.gladia.io</strong> (no credit card needed). Best for Mandarin+English code-switching.</p>
                         </div>
                     </div>
                     <!-- Anthropic Settings -->
@@ -439,7 +455,7 @@
         </div>
 
         <footer class="footer">
-            <p>Meeting Notes AI v9.0 &mdash; Powered by Groq Whisper &amp; Claude AI</p>
+            <p>Meeting Notes AI v9.1 &mdash; Powered by Groq Whisper &amp; Claude AI</p>
             <p>By: Patrick Parco</p>
         </footer>
     </div>
@@ -521,6 +537,6 @@
     </div>
     </main>
 
-    <script src="app.js?v=9.0" defer></script>
+    <script src="app.js?v=9.1" defer></script>
 </body>
 </html>
