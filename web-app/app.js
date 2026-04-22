@@ -132,6 +132,11 @@ let systemAudioChunkTimer = null;
 let systemAudioChunkStartTime = null;
 const SYSTEM_AUDIO_CHUNK_MS = 12000; // 12s chunks
 
+// ==================== LOCAL WHISPER (Transformers.js) ====================
+const LOCAL_WHISPER_MODEL = 'Xenova/whisper-small';
+let localWhisperPipeline = null;
+let localWhisperLoading = false;
+
 // ==================== GLADIA MIC STATE ====================
 let gladiaWs = null;
 let gladiaMicStream = null;
@@ -311,21 +316,24 @@ function updateMicStatus(status) {
 
 // ── System Audio ──
 async function startSystemAudioCapture() {
-    const groqKey = localStorage.getItem('groq_api_key');
-    if (!groqKey) {
-        showToast('Add your free Groq API key in Settings to enable meeting audio capture.', 'warning');
-        const keyInput = document.getElementById('groqApiKey');
-        if (keyInput) {
-            keyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            keyInput.focus();
-            keyInput.classList.add('highlight-input');
-            setTimeout(() => keyInput.classList.remove('highlight-input'), 3000);
+    const meetingProvider = localStorage.getItem('meeting_transcription_provider') || 'groq';
+    if (meetingProvider === 'groq') {
+        const groqKey = localStorage.getItem('groq_api_key');
+        if (!groqKey) {
+            showToast('Add your free Groq API key in Settings, or switch Meeting Audio to Local Whisper (no key needed).', 'warning');
+            const keyInput = document.getElementById('groqApiKey');
+            if (keyInput) {
+                keyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                keyInput.focus();
+                keyInput.classList.add('highlight-input');
+                setTimeout(() => keyInput.classList.remove('highlight-input'), 3000);
+            }
+            return false;
         }
-        return false;
     }
     try {
         const displayStream = await navigator.mediaDevices.getDisplayMedia({
-            audio: { echoCancellation: false, noiseSuppression: false, sampleRate: 16000 },
+            audio: { echoCancellation: false, noiseSuppression: false, sampleRate: 16000, systemAudio: 'include' },
             video: { width: 1, height: 1, frameRate: 1 }
         });
         const audioTracks = displayStream.getAudioTracks();
@@ -405,7 +413,41 @@ function updateSystemAudioStatus(active) {
     if (badge) badge.style.display = active ? 'inline-flex' : 'none';
 }
 
+async function transcribeLocalWhisper(blob) {
+    if (blob.size < 8000) return;
+    showToast('Transcribing with local Whisper…', 'info');
+    try {
+        if (!localWhisperPipeline) {
+            if (localWhisperLoading) {
+                while (localWhisperLoading) await new Promise(r => setTimeout(r, 300));
+            } else {
+                localWhisperLoading = true;
+                showToast('Loading local Whisper model — first run downloads ~244 MB, then it\'s cached.', 'info');
+                try {
+                    const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2/dist/transformers.min.js');
+                    env.allowRemoteModels = true;
+                    localWhisperPipeline = await pipeline('automatic-speech-recognition', LOCAL_WHISPER_MODEL);
+                    showToast('Local Whisper model ready!', 'success');
+                } finally {
+                    localWhisperLoading = false;
+                }
+            }
+        }
+        const sourceLang = localStorage.getItem('source_lang') || 'en-US';
+        const opts = { return_timestamps: false };
+        if (!sourceLang.includes('+')) opts.language = sourceLang.split('-')[0];
+        const arrayBuffer = await blob.arrayBuffer();
+        const result = await localWhisperPipeline(arrayBuffer, opts);
+        if (result.text?.trim()) addTranscriptSegment(result.text.trim(), 'meeting');
+    } catch (e) {
+        showToast('Local Whisper failed: ' + e.message, 'error');
+        console.error('[Local Whisper]', e);
+    }
+}
+
 async function transcribeSystemAudioChunk(blob) {
+    const meetingProvider = localStorage.getItem('meeting_transcription_provider') || 'groq';
+    if (meetingProvider === 'local') { await transcribeLocalWhisper(blob); return; }
     const groqKey = localStorage.getItem('groq_api_key');
     if (!groqKey) return;
     if (blob.size < 8000) {
@@ -2037,6 +2079,7 @@ function saveSettings() {
     if (gladiaKey) localStorage.setItem('gladia_api_key', gladiaKey);
     else localStorage.removeItem('gladia_api_key');
     localStorage.setItem('mic_provider', document.getElementById('micProvider')?.value || 'webspeech');
+    localStorage.setItem('meeting_transcription_provider', document.getElementById('meetingTranscriptionProvider')?.value || 'groq');
     const anthropicKey = document.getElementById('anthropicKey')?.value || '';
     if (anthropicKey) localStorage.setItem('anthropic_api_key', anthropicKey);
     else localStorage.removeItem('anthropic_api_key');
@@ -2077,6 +2120,8 @@ function loadSettings() {
     if (document.getElementById('gladiaApiKey')) document.getElementById('gladiaApiKey').value = gladiaApiKey;
     const micProv = localStorage.getItem('mic_provider') || 'webspeech';
     if (document.getElementById('micProvider')) { document.getElementById('micProvider').value = micProv; onMicProviderChange(); }
+    const meetingTransProv = localStorage.getItem('meeting_transcription_provider') || 'groq';
+    if (document.getElementById('meetingTranscriptionProvider')) document.getElementById('meetingTranscriptionProvider').value = meetingTransProv;
     const anthropicApiKey = localStorage.getItem('anthropic_api_key') || '';
     if (document.getElementById('anthropicKey')) document.getElementById('anthropicKey').value = anthropicApiKey;
     const geminiApiKey = localStorage.getItem('gemini_api_key') || '';
