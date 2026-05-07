@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="AI-powered meeting transcription and summarization. Real-time mic transcription, system audio capture, multilingual translation, and smart summaries.">
     <title>Meeting Notes AI</title>
-    <link rel="stylesheet" href="styles.css?v=9.2">
+    <link rel="stylesheet" href="styles.css?v=10.0">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -24,23 +24,11 @@
     <button onclick="document.getElementById('setupBanner').style.display='none'" style="color:#fff;opacity:0.8;">✕</button>
 </div>
 
-    <!-- ========== FLOATING SUBTITLE OVERLAY ========== -->
-    <div class="floating-overlay" id="floatingOverlay" style="display:none;">
-        <div class="overlay-drag-handle" id="overlayDragHandle">
-            <div class="overlay-title-row">
-                <span class="overlay-rec-dot" id="overlayRecDot"></span>
-                <span class="overlay-title">Live Captions</span>
-            </div>
-            <div class="overlay-ctrl-btns">
-                <button class="overlay-btn" title="Cycle opacity" onclick="cycleOverlayOpacity()">◑</button>
-                <button class="overlay-btn" title="Cycle font size" onclick="cycleOverlayFontSize()">A+</button>
-                <button class="overlay-btn" onclick="closeFloatingOverlay()" title="Close">✕</button>
-            </div>
-        </div>
-        <div class="overlay-captions" id="overlayCaptions">
-            <p class="overlay-placeholder">Captions appear here when recording…</p>
-        </div>
-    </div>
+<!-- Audio quality warning -->
+<div id="audioQualityWarning" class="audio-quality-warning" style="display:none;">
+    <span>⚠️ <strong>Poor audio quality detected</strong> — speech is being lost. Check your microphone, reduce background noise, or try moving closer to the mic.</span>
+    <button onclick="hideAudioQualityWarning()">✕</button>
+</div>
 
     <!-- ========== SIDEBAR OVERLAY ========== -->
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeHistorySidebar()"></div>
@@ -52,7 +40,8 @@
             <button class="sidebar-close" onclick="closeHistorySidebar()">✕</button>
         </div>
         <div class="sidebar-search">
-            <input type="text" id="historySearch" placeholder="Search meetings…" oninput="filterMeetingHistory()">
+            <input type="text" id="historySearch" placeholder="Search titles, transcripts, action items…" oninput="filterMeetingHistory()">
+            <p id="searchScopeHint" class="search-scope-hint" style="display:none;">Searching titles · summaries · transcripts · action items · decisions</p>
         </div>
         <div class="sidebar-content" id="historyList">
             <div class="history-empty">
@@ -87,10 +76,7 @@
                 <button class="btn btn-ghost header-btn header-btn-icon" onclick="toggleHistorySidebar()" title="Meeting history">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:18px;height:18px"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/></svg>
                 </button>
-                <button class="btn btn-ghost header-btn header-btn-icon" id="overlayToggleBtn" onclick="toggleFloatingOverlay()" title="Floating captions">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:18px;height:18px"><path stroke-linecap="round" stroke-linejoin="round" d="M6 20.25h12m-7.5-3v3m3-3v3m-10.125-3h17.25c.621 0 1.125-.504 1.125-1.125V4.875c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125z"/></svg>
-                </button>
-                <button class="btn btn-ghost header-btn header-btn-icon" id="pipToggleBtn" onclick="openDocumentPiP()" title="Pop-out overlay (always on top)">
+                <button class="btn btn-ghost header-btn header-btn-icon" id="pipToggleBtn" onclick="openDocumentPiP()" title="Pop-out captions (always on top)">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:18px;height:18px"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg>
                 </button>
                 <button class="btn btn-ghost header-btn header-btn-icon dark-toggle-btn" onclick="toggleDarkMode()" id="darkToggleBtn" title="Toggle dark mode">🌙</button>
@@ -129,6 +115,7 @@
                     <span class="btn-icon">⏹</span>
                     <span class="btn-text">Stop &amp; Process</span>
                 </button>
+                <button id="bookmarkBtn" class="btn btn-secondary" onclick="dropBookmark()" disabled title="Drop a chapter bookmark at current time (B)">📌 Bookmark</button>
                 <button id="addMeetingAudioBtnMain" class="btn btn-secondary" onclick="handleAddMeetingAudio()" title="Capture Teams/Zoom/Google Meet audio">🖥️ Add Meeting Audio</button>
             </div>
 
@@ -367,6 +354,9 @@
                     <div class="input-group checkbox-group">
                         <label><input type="checkbox" id="autoCorrectEnabled" checked> Enable auto-correction</label>
                     </div>
+                    <div class="input-group checkbox-group">
+                        <label><input type="checkbox" id="fillerFilterEnabled" checked> Filter filler words <span style="font-size:.78em;color:var(--text-muted);">(um, uh, like, 那个, 嗯…)</span></label>
+                    </div>
                 </div>
 
                 <hr class="settings-divider">
@@ -385,6 +375,21 @@
                             </select>
                             meetings
                         </label>
+                    </div>
+                </div>
+
+                <hr class="settings-divider">
+
+                <!-- Integrations / Webhook -->
+                <div class="settings-section">
+                    <h4 class="settings-section-title">Integrations</h4>
+                    <div class="input-group">
+                        <label for="webhookUrl">Webhook URL <span style="font-size:.75em;color:var(--text-muted);">(Zapier / Make / n8n / Slack)</span></label>
+                        <div style="display:flex;gap:6px;">
+                            <input type="url" id="webhookUrl" placeholder="https://hooks.zapier.com/…" style="flex:1;" onchange="saveSettings()">
+                            <button id="webhookTestBtn" class="btn btn-small btn-secondary" onclick="testWebhook()">Test</button>
+                        </div>
+                        <p class="settings-hint">Receives a JSON POST when a meeting ends — contains the summary, action items, transcript, and bookmarks. Use <strong>Zapier Webhooks</strong> or <strong>Make</strong> to route to Slack, Notion, email, etc.</p>
                     </div>
                 </div>
 
@@ -418,6 +423,7 @@
                         <span class="edit-hint">Double-click to edit</span>
                         <button class="btn btn-small" onclick="copyToClipboard('transcript')">📋 Copy</button>
                         <button class="btn btn-small" onclick="downloadFile('transcript')">⬇️ Download</button>
+                        <button class="btn btn-small btn-secondary" onclick="exportBilingualTranscript()" title="Export bilingual Markdown table">📄 Bilingual</button>
                         <button class="btn btn-small btn-primary" onclick="saveToClaudeProject()" title="Download transcript file + open Claude Project">↗ Save to Claude Project</button>
                         <button class="btn btn-small btn-ghost" onclick="resetClaudeProjectUrl()" title="Change Claude Project URL">✏</button>
                     </div>
@@ -448,6 +454,7 @@
             <div class="download-all">
                 <button class="btn btn-primary" onclick="saveCurrentMeeting()">💾 Save Meeting</button>
                 <button class="btn btn-secondary" onclick="exportMeetingMarkdown()">📤 Export Markdown</button>
+                <button class="btn btn-secondary" onclick="generateFollowUpEmail()">✉️ Follow-Up Email</button>
                 <button class="btn btn-secondary" onclick="downloadAll()">⬇️ Download All</button>
                 <button class="btn btn-secondary" onclick="startNewMeeting()">🔄 New Meeting</button>
             </div>
@@ -469,6 +476,28 @@
     </div>
 
     <!-- ========== MODALS ========== -->
+
+    <!-- Follow-Up Email Modal -->
+    <div class="modal-overlay" id="emailModal" style="display:none;">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>✉️ Follow-Up Email Draft</h3>
+                <button class="modal-close" onclick="closeEmailModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="emailGenerating" style="text-align:center;padding:24px 0;display:none;">
+                    <div class="spinner" style="margin:0 auto 12px;"></div>
+                    <p style="color:var(--text-muted);font-size:.9rem;">Drafting follow-up email…</p>
+                </div>
+                <textarea id="emailDraftContent" style="width:100%;min-height:320px;font-family:var(--font);font-size:.875rem;line-height:1.6;border:1px solid var(--border);border-radius:var(--radius);padding:12px;resize:vertical;background:var(--bg-secondary);color:var(--text-primary);" placeholder="Email draft will appear here…"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="copyEmailDraft()">📋 Copy</button>
+                <button class="btn btn-secondary" onclick="openMailto()">📨 Open in Mail App</button>
+                <button class="btn btn-primary" onclick="closeEmailModal()">Done</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Knowledge Base Manager -->
     <div class="modal-overlay" id="kbManagerModal" style="display:none;">
@@ -545,6 +574,6 @@
     </div>
     </main>
 
-    <script src="app.js?v=9.1" defer></script>
+    <script src="app.js?v=9.9" defer></script>
 </body>
 </html>

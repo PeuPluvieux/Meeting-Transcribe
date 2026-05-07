@@ -38,9 +38,15 @@ let _currentParaTransEl = null;
 let _interimSpan = null;
 let _lastSegmentEndedAt = 0;
 let _currentParaLang = null;
-const PARA_GAP_MS = 2500;
+const PARA_GAP_MS = 8000; // 8s gap before a new paragraph block
+
+// ==================== SPEECH WATCHDOG ====================
+let _lastSpeechResultAt = 0;
+let _speechWatchdogTimer = null;
+const SPEECH_WATCHDOG_MS = 25000; // if no result for 25s, assume Chrome API died
 let meetingData = {
     transcript: [],
+    bookmarks: [],
     fullTranscript: '',
     summary: '',
     keyPoints: [],
@@ -52,7 +58,11 @@ let meetingData = {
 };
 
 // ==================== QE SYSTEM PROMPT ====================
-const QE_SYSTEM_PROMPT = `You are an expert meeting analyst. Analyze this meeting transcript and respond ONLY with valid JSON. Be COMPREHENSIVE and detailed — err on the side of MORE detail, never summarize too briefly. Capture EVERY topic, decision, concern, and action discussed.\n{"summary":"4-6 detailed paragraphs covering ALL major topics discussed in order. Include specific names, numbers, metrics, part numbers, defect descriptions, root causes, concerns raised, and conclusions reached. Do NOT omit any topic that was discussed for more than a few sentences.","keyPoints":["Up to 20 specific, concrete facts — include part numbers, defect counts, percentages, names, dates, deadlines, process steps, or any specific detail that was mentioned"],"keyDecisions":["Every explicit decision made — what was decided, who decided, why — empty array if none"],"actionItems":["Full context for each item: Task: [detailed description of what needs to be done] — Owner: [person responsible] — Deadline: [date or timeframe] — Context: [why this action is needed]"],"nextSteps":["Every follow-up action, inspection, escalation, or pending item — include who needs to do what and by when — empty array if none"]}`;
+const QE_SYSTEM_PROMPT = `You are an expert meeting analyst. Analyze this meeting transcript and respond ONLY with valid JSON. Be COMPREHENSIVE and detailed — err on the side of MORE detail, never summarize too briefly. Capture EVERY topic, decision, concern, and action discussed.
+
+Speaker attribution rules for actionItems: If the transcript has [Speaker]: prefixes, use them to identify who committed to or was assigned each action. If a speaker said "I will", "I'll", "let me", "I can take", or was explicitly told "you should / can you / please" — that speaker is the owner. If no speaker label is present, infer from context or use "TBD".
+
+{"summary":"4-6 detailed paragraphs covering ALL major topics discussed in order. Include specific names, numbers, metrics, part numbers, defect descriptions, root causes, concerns raised, and conclusions reached. Do NOT omit any topic that was discussed for more than a few sentences.","keyPoints":["Up to 20 specific, concrete facts — include part numbers, defect counts, percentages, names, dates, deadlines, process steps, or any specific detail that was mentioned"],"keyDecisions":["Every explicit decision made — what was decided, who decided, why — empty array if none"],"actionItems":["Full context for each item: Task: [detailed description] — Owner: [name of person who committed or was assigned — use TBD if truly unknown] — Deadline: [date or timeframe] — Context: [why this action is needed]"],"nextSteps":["Every follow-up action or pending item with owner name and timing — empty array if none"]}`;
 
 // ==================== MITAC QA SYSTEM PROMPT ====================
 // Used by analyzeWithAnthropic() — context-aware for MiTAC server manufacturing QA meetings
@@ -64,7 +74,7 @@ YOUR TASKS:
 3. PRESERVE these technical terms EXACTLY as written (never translate or alter them):
    OQC, IPQC, DPPM, MDI, NCR, CAPA, FAI, BMC, iDRAC, PTU, PN, SN, ZOU, HOU, RMA, BOM, ECO, PCB, PCBA, DOA, DOE, FMEA, SOP, WI, QMS
 4. GENERATE a comprehensive meeting summary capturing all key topics, decisions, defects, metrics, and concerns
-5. EXTRACT action items with owners and deadlines wherever identifiable
+5. EXTRACT action items with owners and deadlines wherever identifiable. If transcript has [Speaker]: prefixes, attribute each action to whoever said "I will / I'll / let me / I can" or was told "you should / can you / please". Use speaker name as owner. Default to TBD only if genuinely unclear.
 
 RESPOND ONLY with valid JSON — no markdown, no code fences, no explanation, just the raw JSON object:
 {
@@ -122,6 +132,12 @@ let speechSentenceBuffer = '';
 let speechSentenceFlushTimer = null;
 const SPEECH_SENTENCE_TIMEOUT = 1000;
 const SENTENCE_END_RE = /[.?!。？！…]+\s*$/;
+
+// ==================== AUDIO QUALITY MONITOR ====================
+let _aqInterimPeakWords = 0;
+let _aqPoorSegments = 0;
+const AQ_RATIO_THRESHOLD = 0.5; // final/interim word ratio below this = poor segment
+const AQ_POOR_COUNT = 3;        // consecutive poor segments before showing banner
 
 // ==================== SYSTEM AUDIO (Groq Whisper) ====================
 let systemAudioRecorder = null;
@@ -186,7 +202,7 @@ function initSpeechRecognition() {
     recognition.interimResults = true;
     // In bilingual mode use more alternatives so the recognizer has better candidates for mixed speech
     recognition.maxAlternatives = sourceLang.includes('+') ? 3 : 1;
-    recognition.onstart = () => { speechActive = true; updateMicStatus('listening'); };
+    recognition.onstart = () => { speechActive = true; _lastSpeechResultAt = Date.now(); updateMicStatus('listening'); };
     recognition.onresult = (event) => { if (appState === 'recording') handleSpeechResult(event); };
     recognition.onerror = (event) => {
         if (event.error === 'no-speech') return;
@@ -204,6 +220,7 @@ function initSpeechRecognition() {
         speechActive = false;
         updateMicStatus(appState === 'recording' ? 'reconnecting' : 'idle');
         if (appState === 'recording') {
+            clearTimeout(_recognitionReconnectTimer);
             _recognitionReconnectTimer = setTimeout(() => {
                 _recognitionReconnectTimer = null;
                 if (appState === 'recording' && recognition) { try { recognition.start(); } catch(e){} }
@@ -214,6 +231,7 @@ function initSpeechRecognition() {
 }
 
 function handleSpeechResult(event) {
+    _lastSpeechResultAt = Date.now();
     let interimText = '';
     let finalText = '';
     const isBilingual = (localStorage.getItem('source_lang') || '').includes('+');
@@ -235,6 +253,9 @@ function handleSpeechResult(event) {
         else interimText += best;
     }
     if (finalText.trim()) {
+        const finalWords = finalText.trim().split(/\s+/).length;
+        _checkAudioQuality(finalWords);
+        _aqInterimPeakWords = 0;
         const combined = (speechSentenceBuffer + ' ' + finalText).trim();
         speechSentenceBuffer = '';
         clearTimeout(speechSentenceFlushTimer); speechSentenceFlushTimer = null;
@@ -244,6 +265,8 @@ function handleSpeechResult(event) {
     if (interimText.trim()) {
         // Web Speech API interims are CUMULATIVE — each event already contains the full
         // current utterance. Replace the buffer instead of appending to avoid repetition.
+        const iwc = interimText.trim().split(/\s+/).length;
+        if (iwc > _aqInterimPeakWords) _aqInterimPeakWords = iwc;
         speechSentenceBuffer = interimText.trim();
         updateInterimTranscript(interimText.trim());
         clearTimeout(speechSentenceFlushTimer);
@@ -264,9 +287,10 @@ async function startSpeechRecognition() {
     speechSentenceBuffer = '';
     try {
         recognition.start();
+        startSpeechWatchdog();
         return true;
     } catch (e) {
-        if (e.name === 'InvalidStateError') return true; // already started
+        if (e.name === 'InvalidStateError') { startSpeechWatchdog(); return true; }
         console.error('[Speech] start failed:', e);
         showToast('Could not start mic: ' + e.message, 'error');
         return false;
@@ -274,12 +298,69 @@ async function startSpeechRecognition() {
 }
 
 function stopSpeechRecognition() {
+    stopSpeechWatchdog();
     clearTimeout(_recognitionReconnectTimer);
     _recognitionReconnectTimer = null;
     flushSpeechBuffer();
     if (recognition) { try { recognition.stop(); } catch (e) {} }
     speechActive = false;
     updateMicStatus('idle');
+}
+
+function startSpeechWatchdog() {
+    stopSpeechWatchdog();
+    _lastSpeechResultAt = Date.now();
+    _speechWatchdogTimer = setInterval(() => {
+        if (appState !== 'recording' || getMicProvider() !== 'webspeech') {
+            stopSpeechWatchdog();
+            return;
+        }
+        // If no result (interim or final) has arrived in SPEECH_WATCHDOG_MS, Chrome's API
+        // has silently died — speechActive may still be true if onend never fired.
+        // _lastSpeechResultAt is reset on every onstart so genuine silence doesn't false-trigger.
+        if (Date.now() - _lastSpeechResultAt > SPEECH_WATCHDOG_MS) {
+            console.warn('[Speech] Watchdog: no results in 25s — restarting recognition');
+            clearTimeout(_recognitionReconnectTimer);
+            if (recognition) { try { recognition.abort(); } catch(e) {} }
+            initSpeechRecognition();
+            try { recognition.start(); } catch(e) {}
+            _lastSpeechResultAt = Date.now();
+        }
+    }, 10000);
+}
+
+function stopSpeechWatchdog() {
+    if (_speechWatchdogTimer) { clearInterval(_speechWatchdogTimer); _speechWatchdogTimer = null; }
+}
+
+// ==================== AUDIO QUALITY CHECK ====================
+function _checkAudioQuality(finalWordCount) {
+    if (getMicProvider() !== 'webspeech') return;
+    if (_aqInterimPeakWords < 4) { _aqPoorSegments = 0; return; } // utterance too short to judge
+    const ratio = finalWordCount / _aqInterimPeakWords;
+    if (ratio < AQ_RATIO_THRESHOLD) {
+        _aqPoorSegments++;
+        if (_aqPoorSegments >= AQ_POOR_COUNT) showAudioQualityWarning();
+    } else {
+        _aqPoorSegments = 0;
+        hideAudioQualityWarning();
+    }
+}
+
+function showAudioQualityWarning() {
+    const el = document.getElementById('audioQualityWarning');
+    if (el) el.style.display = 'flex';
+}
+
+function hideAudioQualityWarning() {
+    const el = document.getElementById('audioQualityWarning');
+    if (el) el.style.display = 'none';
+}
+
+function resetAudioQualityMonitor() {
+    _aqInterimPeakWords = 0;
+    _aqPoorSegments = 0;
+    hideAudioQualityWarning();
 }
 
 function pauseSpeechRecognition() {
@@ -612,6 +693,34 @@ const KB_STORAGE_KEY = 'meeting_ai_knowledge_base';
 let knowledgeBase = null;
 let editingCorrectionId = null;
 
+// ==================== FILLER WORD FILTER ====================
+const FILLER_WORDS_EN = [
+    'uh', 'um', 'uhh', 'umm', 'hmm', 'hm', 'er', 'err', 'ah', 'ahh',
+    'like', 'you know', 'i mean', 'i guess', 'sort of', 'kind of',
+    'basically', 'literally', 'actually', 'honestly', 'right',
+    'okay so', 'so basically', 'and uh', 'and um', 'but uh', 'but um'
+];
+const FILLER_WORDS_ZH = [
+    '那个', '就是', '就是说', '然后呢', '对对对', '嗯', '呃', '啊', '那', '然后',
+    '就', '这个', '我觉得就是', '怎么说', '对吧'
+];
+
+function filterFillerWords(text) {
+    if (localStorage.getItem('filler_filter_enabled') === 'false') return text;
+    let out = text;
+    // English fillers — whole-word, case-insensitive
+    for (const f of FILLER_WORDS_EN) {
+        const re = new RegExp('(?<![\\w]|[\\u4e00-\\u9fff])' + f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w]|[\\u4e00-\\u9fff])', 'gi');
+        out = out.replace(re, '');
+    }
+    // Mandarin fillers — direct substring removal
+    for (const f of FILLER_WORDS_ZH) {
+        out = out.split(f).join('');
+    }
+    // Clean up leftover double spaces and leading/trailing whitespace
+    return out.replace(/\s{2,}/g, ' ').trim();
+}
+
 // ==================== INDEXEDDB ====================
 const DB_NAME = 'MeetingNotesAI';
 const DB_VERSION = 1;
@@ -686,15 +795,64 @@ async function deleteMeeting(id) {
     });
 }
 
+function _meetingMatchesQuery(m, q) {
+    if (m.title?.toLowerCase().includes(q)) return true;
+    if (m.summary?.toLowerCase().includes(q)) return true;
+    if (m.fullTranscript?.toLowerCase().includes(q)) return true;
+    if ((m.keyPoints || []).some(p => String(p).toLowerCase().includes(q))) return true;
+    if ((m.actionItems || []).some(a => String(a).toLowerCase().includes(q))) return true;
+    if ((m.keyDecisions || []).some(d => String(d).toLowerCase().includes(q))) return true;
+    if ((m.nextSteps || []).some(s => String(s).toLowerCase().includes(q))) return true;
+    if ((m.transcript || []).some(s => (s.corrected || s.original || '').toLowerCase().includes(q))) return true;
+    if ((m.transcript || []).some(s => (s.translated || '').toLowerCase().includes(q))) return true;
+    return false;
+}
+
 async function searchMeetings(query) {
     const meetings = await getAllMeetings();
     if (!query) return meetings;
     const q = query.toLowerCase();
-    return meetings.filter(m =>
-        m.title?.toLowerCase().includes(q) ||
-        m.fullTranscript?.toLowerCase().includes(q) ||
-        m.summary?.toLowerCase().includes(q)
-    );
+    return meetings.filter(m => _meetingMatchesQuery(m, q));
+}
+
+function _highlightQuery(text, query) {
+    if (!query || !text) return escapeHtml(text || '');
+    const idx = text.toLowerCase().indexOf(query.toLowerCase());
+    if (idx === -1) return escapeHtml(text);
+    return escapeHtml(text.slice(0, idx))
+        + '<mark class="search-highlight">' + escapeHtml(text.slice(idx, idx + query.length)) + '</mark>'
+        + escapeHtml(text.slice(idx + query.length));
+}
+
+function _getMeetingMatchSnippets(m, query) {
+    const q = query.toLowerCase();
+    const snippets = [];
+    const addSnippet = (text, label) => {
+        if (snippets.length >= 2 || !text) return;
+        const idx = text.toLowerCase().indexOf(q);
+        if (idx === -1) return;
+        const start = Math.max(0, idx - 30);
+        const end = Math.min(text.length, idx + query.length + 60);
+        snippets.push({ label, snippet: (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '') });
+    };
+    addSnippet(m.summary, 'Summary');
+    if (snippets.length < 2) {
+        for (const p of (m.keyPoints || [])) { if (String(p).toLowerCase().includes(q)) { snippets.push({ label: 'Key point', snippet: String(p).slice(0, 120) }); break; } }
+    }
+    if (snippets.length < 2) {
+        for (const a of (m.actionItems || [])) { if (String(a).toLowerCase().includes(q)) { snippets.push({ label: 'Action item', snippet: String(a).slice(0, 120) }); break; } }
+    }
+    if (snippets.length < 2) {
+        for (const d of (m.keyDecisions || [])) { if (String(d).toLowerCase().includes(q)) { snippets.push({ label: 'Decision', snippet: String(d).slice(0, 120) }); break; } }
+    }
+    if (snippets.length < 2) {
+        for (const seg of (m.transcript || [])) {
+            const txt = seg.corrected || seg.original || '';
+            if (txt.toLowerCase().includes(q)) { snippets.push({ label: `Transcript [${seg.timestamp}]`, snippet: txt.slice(0, 120) }); break; }
+        }
+    }
+    if (snippets.length < 2) addSnippet(m.fullTranscript, 'Transcript');
+    return snippets;
 }
 
 // ==================== OLLAMA ====================
@@ -975,15 +1133,16 @@ function addTranscriptSegment(text, source = 'mic') {
     _lastAddedText = text.trim();
     _lastAddedAt = now;
     const corrected = applyKnowledgeBase(text);
+    const filtered = filterFillerWords(corrected || text);
     const elapsed = getElapsedSeconds();
-    const displayText = corrected || text;
+    const displayText = filtered || corrected || text;
 
     const seg = {
         id: currentSegmentId++,
         timestamp: formatTime(elapsed),
         startSeconds: elapsed,
         original: text,
-        corrected: corrected !== text ? corrected : null,
+        corrected: filtered !== text ? filtered : null,
         translated: null,
         language: null,
         languageFlag: null,
@@ -1072,10 +1231,23 @@ function displaySegment(seg) {
         const group = document.createElement('div');
         group.className = 'para-group';
 
+        const paraHeader = document.createElement('div');
+        paraHeader.className = 'para-header';
+
         const timeEl = document.createElement('span');
         timeEl.className = 'para-time';
         timeEl.textContent = seg.timestamp;
-        group.appendChild(timeEl);
+        paraHeader.appendChild(timeEl);
+
+        // Language badge — only shown in bilingual mode
+        if (seg.language) {
+            const badge = document.createElement('span');
+            badge.className = 'lang-badge lang-badge-' + seg.language;
+            badge.textContent = seg.language === 'zh' ? '中文' : 'EN';
+            paraHeader.appendChild(badge);
+        }
+
+        group.appendChild(paraHeader);
 
         const paraText = document.createElement('p');
         paraText.className = 'para-text';
@@ -1239,8 +1411,12 @@ function updateTimerDisplay() {
     const h = Math.floor(secs / 3600);
     const m = Math.floor((secs % 3600) / 60);
     const s = secs % 60;
-    document.getElementById('timer').textContent =
-        String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    const formatted = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    document.getElementById('timer').textContent = formatted;
+    if (pipWindow && !pipWindow.closed) {
+        const pipTimerEl = pipWindow.document.getElementById('pipTimer');
+        if (pipTimerEl) pipTimerEl.textContent = formatted;
+    }
 }
 
 function resetTimer() {
@@ -1272,25 +1448,25 @@ async function startRecording() {
     const micProvider = getMicProvider();
     if (micProvider === 'webspeech' && !checkSpeechSupport()) return;
     if (appState === 'done') {
-        meetingData = { transcript: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [] };
+        meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
         currentSegmentId = 0; currentMeetingId = null;
+        _lastAddedText = ''; _lastAddedAt = 0;
     }
-    // Clear DOM and set state BEFORE starting recognition to avoid race conditions
+    // Clear DOM and ALL paragraph state BEFORE starting recognition to avoid stale-ref bug
     interimElement = null;
-    document.getElementById('liveTranscript').innerHTML = '<p class="placeholder">Speak now — transcript will appear here…</p>';
+    clearLiveTranscript();
+    const _ltEl = document.getElementById('liveTranscript');
+    if (_ltEl) _ltEl.innerHTML = '<p class="placeholder">Speak now — transcript will appear here…</p>';
     recordingStartTime = Date.now(); pausedDuration = 0; pauseStartTime = null;
     setAppState('recording');
     startTimer();
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'inline-flex';
-    const dot = document.getElementById('overlayRecDot');
-    if (dot) dot.classList.add('active');
     const started = micProvider === 'gladia' ? await startGladiaMic() : await startSpeechRecognition();
     if (!started) {
         setAppState('idle');
         stopTimer();
         if (badge) badge.style.display = 'none';
-        if (dot) dot.classList.remove('active');
     }
 }
 
@@ -1305,9 +1481,6 @@ function pauseRecording() {
 
     const micBadge = document.getElementById('micBadge');
     if (micBadge) micBadge.style.display = 'none';
-
-    const dot = document.getElementById('overlayRecDot');
-    if (dot) dot.classList.remove('active');
 }
 
 async function resumeRecording() {
@@ -1325,9 +1498,6 @@ async function resumeRecording() {
 
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'inline-flex';
-
-    const dot = document.getElementById('overlayRecDot');
-    if (dot) dot.classList.add('active');
 }
 
 async function stopRecording() {
@@ -1339,9 +1509,8 @@ async function stopRecording() {
     await new Promise(r => setTimeout(r, 500));
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'none';
-    const dot = document.getElementById('overlayRecDot');
-    if (dot) dot.classList.remove('active');
     stopTimer();
+    resetAudioQualityMonitor();
     setAppState('processing');
     await processRecording();
     setAppState('done');
@@ -1351,6 +1520,7 @@ async function stopRecording() {
 function updateRecordingUI() {
     const recordBtn = document.getElementById('recordBtn');
     const stopBtn = document.getElementById('stopBtn');
+    const bookmarkBtn = document.getElementById('bookmarkBtn');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const iconEl = document.getElementById('recordBtnIcon');
@@ -1370,6 +1540,7 @@ function updateRecordingUI() {
             if (statusText) statusText.textContent = appState === 'done' ? 'Completed' : 'Ready to record';
             stopBtn.disabled = true;
             recordBtn.disabled = false;
+            if (bookmarkBtn) bookmarkBtn.disabled = true;
             break;
         case 'recording':
             iconEl.textContent = '⏸';
@@ -1379,6 +1550,7 @@ function updateRecordingUI() {
             if (statusDot) { statusDot.className = 'status-dot'; statusDot.classList.add('recording'); }
             if (statusText) statusText.textContent = 'Recording & Transcribing…';
             stopBtn.disabled = false;
+            if (bookmarkBtn) bookmarkBtn.disabled = false;
             break;
         case 'paused':
             iconEl.textContent = '▶';
@@ -1388,15 +1560,18 @@ function updateRecordingUI() {
             if (statusDot) { statusDot.className = 'status-dot'; statusDot.classList.add('paused'); }
             if (statusText) statusText.textContent = 'Paused';
             stopBtn.disabled = false;
+            if (bookmarkBtn) bookmarkBtn.disabled = false;
             break;
         case 'processing':
             iconEl.textContent = '⏺';
             textEl.textContent = 'Processing…';
             recordBtn.disabled = true;
             stopBtn.disabled = true;
+            if (bookmarkBtn) bookmarkBtn.disabled = true;
             if (statusText) statusText.textContent = 'Processing…';
             break;
     }
+    updatePiPControls();
 }
 
 // ==================== PROCESSING ====================
@@ -1418,7 +1593,11 @@ async function processRecording() {
     }
     showProcessingOverlay(true, 'Building transcript…');
     try {
-        const transcriptText = meetingData.transcript.map(s => s.corrected || s.original).join(' ');
+        // Include speaker labels when available so AI can attribute action items correctly
+        const transcriptText = meetingData.transcript.map(s => {
+            const txt = s.corrected || s.original;
+            return s.speaker ? `[${s.speaker}]: ${txt}` : txt;
+        }).join('\n');
         let analysis;
         if (llmProvider === 'groq') {
             showProcessingOverlay(true, 'Analyzing with Groq AI…');
@@ -1474,6 +1653,7 @@ async function processRecording() {
         displayResults();
         showProcessingOverlay(false);
         showToast('Meeting processed!', 'success');
+        pushWebhook().catch(() => {});
     } catch (e) {
         showProcessingOverlay(false);
         meetingData.summary = 'Error: ' + e.message;
@@ -1955,20 +2135,32 @@ function displayResults() {
     document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
 }
 
+function _bookmarkMarkerHTML(bk) {
+    return `<div class="bookmark-marker bookmark-marker-result"><span class="bookmark-pin">📌</span><span class="bookmark-ts">${bk.ts}</span>${bk.label ? `<span class="bookmark-label">${escapeHtml(bk.label)}</span>` : ''}</div>`;
+}
+
 function formatFinalTranscript() {
-    return meetingData.transcript.map(seg => {
+    const bookmarks = (meetingData.bookmarks || []).slice().sort((a, b) => a.startSeconds - b.startSeconds);
+    let bIdx = 0;
+    let html = '';
+    meetingData.transcript.forEach(seg => {
+        while (bIdx < bookmarks.length && bookmarks[bIdx].startSeconds <= (seg.startSeconds ?? Infinity)) {
+            html += _bookmarkMarkerHTML(bookmarks[bIdx++]);
+        }
         const text = seg.corrected || seg.original;
         const speakerBadge = getSpeakerBadgeHTML(seg.speaker);
         const langIndicator = seg.languageFlag ? ` <span class="lang-indicator">${seg.languageFlag} ${getLanguageName(seg.language)}</span>` : '';
         const badges = (seg.corrected ? ' <span class="corrected-badge">corrected</span>' : '') + (seg.editedAt ? ' <span class="edited-badge">edited</span>' : '');
-        return `<div class="transcript-segment editable" id="segment-${seg.id}">
+        html += `<div class="transcript-segment editable" id="segment-${seg.id}">
             <div class="transcript-time">${speakerBadge}[${seg.timestamp}]${langIndicator}
                 <button class="speaker-assign-btn" onclick="showSpeakerMenu(${seg.id}, event)">+Speaker</button>
             </div>
             <div class="transcript-original">${escapeHtml(text)}${badges}</div>
             ${seg.translated ? `<div class="transcript-translation has-translation">→ ${escapeHtml(seg.translated)}</div>` : ''}
         </div>`;
-    }).join('');
+    });
+    while (bIdx < bookmarks.length) html += _bookmarkMarkerHTML(bookmarks[bIdx++]);
+    return html;
 }
 
 function parseActionItem(item) {
@@ -2071,6 +2263,7 @@ function saveSettings() {
     localStorage.setItem('llm_provider', document.getElementById('llmProvider')?.value || 'groq');
     localStorage.setItem('ollama_model', document.getElementById('ollamaModel')?.value || 'llama3.2');
     localStorage.setItem('auto_correct_enabled', document.getElementById('autoCorrectEnabled')?.checked ? 'true' : 'false');
+    localStorage.setItem('filler_filter_enabled', document.getElementById('fillerFilterEnabled')?.checked ? 'true' : 'false');
     localStorage.setItem('translation_provider', document.getElementById('translationProvider')?.value || 'google');
     const groqKey = document.getElementById('groqApiKey')?.value || '';
     if (groqKey) localStorage.setItem('groq_api_key', groqKey);
@@ -2089,6 +2282,10 @@ function saveSettings() {
 
     localStorage.setItem('auto_cleanup_enabled', document.getElementById('autoCleanupEnabled')?.checked ? 'true' : 'false');
     localStorage.setItem('auto_cleanup_limit', document.getElementById('autoCleanupLimit')?.value || '10');
+
+    const webhookUrl = document.getElementById('webhookUrl')?.value?.trim() || '';
+    if (webhookUrl) localStorage.setItem('webhook_url', webhookUrl);
+    else localStorage.removeItem('webhook_url');
 
     showToast('Settings saved!', 'success');
     toggleSettings();
@@ -2112,6 +2309,8 @@ function loadSettings() {
     if (document.getElementById('llmProvider')) { document.getElementById('llmProvider').value = llmProvider; onLLMProviderChange(); }
     if (document.getElementById('ollamaModel')) document.getElementById('ollamaModel').value = ollamaModel;
     if (document.getElementById('autoCorrectEnabled')) document.getElementById('autoCorrectEnabled').checked = autoCorrect;
+    const fillerFilter = localStorage.getItem('filler_filter_enabled') !== 'false';
+    if (document.getElementById('fillerFilterEnabled')) document.getElementById('fillerFilterEnabled').checked = fillerFilter;
     if (document.getElementById('translationProvider')) { document.getElementById('translationProvider').value = translationProv; onTranslationProviderChange(); }
 
     const groqApiKey = localStorage.getItem('groq_api_key') || '';
@@ -2137,6 +2336,9 @@ function loadSettings() {
     const cleanupLimit = localStorage.getItem('auto_cleanup_limit') || '10';
     if (document.getElementById('autoCleanupLimit')) document.getElementById('autoCleanupLimit').value = cleanupLimit;
 
+    const webhookUrl = localStorage.getItem('webhook_url') || '';
+    if (document.getElementById('webhookUrl')) document.getElementById('webhookUrl').value = webhookUrl;
+
     getKnowledgeBase();
     updateKBStats();
 }
@@ -2151,7 +2353,7 @@ function startNewMeeting() {
         stopTimer();
     }
 
-    meetingData = { transcript: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
+    meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
     currentSegmentId = 0;
     interimElement = null;
     _lastAddedText = '';
@@ -2161,7 +2363,8 @@ function startNewMeeting() {
     resetTimer();
 
     document.getElementById('resultsSection').style.display = 'none';
-    document.getElementById('liveTranscript').innerHTML = '<p class="placeholder">Transcript will appear here as you speak…</p>';
+    clearLiveTranscript(); // resets _currentParaGroup and all related state vars
+    resetAudioQualityMonitor();
 
     const micBadge = document.getElementById('micBadge');
     if (micBadge) micBadge.style.display = 'none';
@@ -2173,56 +2376,13 @@ function startNewMeeting() {
 // ==================== FLOATING OVERLAY ====================
 let pipWindow = null;
 let pipCaptionEl = null;
-let overlayVisible = false;
-let overlayOpacityLevel = 0;
-let overlayFontLevel = 0;
-const OVERLAY_OPACITIES = [0.9, 0.7, 0.5];
-const OVERLAY_FONTS = ['16px', '20px', '24px'];
 const MAX_OVERLAY_LINES = 5;
 let overlayLines = [];
 
-function toggleFloatingOverlay() {
-    const overlay = document.getElementById('floatingOverlay');
-    overlayVisible = !overlayVisible;
-    overlay.style.display = overlayVisible ? 'block' : 'none';
-    const btn = document.getElementById('overlayToggleBtn');
-    if (btn) btn.classList.toggle('active', overlayVisible);
-}
-
-function closeFloatingOverlay() {
-    overlayVisible = false;
-    document.getElementById('floatingOverlay').style.display = 'none';
-    const btn = document.getElementById('overlayToggleBtn');
-    if (btn) btn.classList.remove('active');
-}
-
-function cycleOverlayOpacity() {
-    overlayOpacityLevel = (overlayOpacityLevel + 1) % OVERLAY_OPACITIES.length;
-    const overlay = document.getElementById('floatingOverlay');
-    if (overlay) overlay.style.setProperty('--overlay-bg-opacity', OVERLAY_OPACITIES[overlayOpacityLevel]);
-}
-
-function cycleOverlayFontSize() {
-    overlayFontLevel = (overlayFontLevel + 1) % OVERLAY_FONTS.length;
-    const captions = document.getElementById('overlayCaptions');
-    if (captions) captions.style.fontSize = OVERLAY_FONTS[overlayFontLevel];
-}
-
 function pushOverlayCaption(text) {
     if (!text?.trim()) return;
-    const container = document.getElementById('overlayCaptions');
-    if (!container) return;
-
-    container.querySelector('.overlay-placeholder')?.remove();
-
     overlayLines.push(text);
     if (overlayLines.length > MAX_OVERLAY_LINES) overlayLines.shift();
-
-    container.innerHTML = overlayLines.map(line =>
-        `<div class="overlay-caption-line">${escapeHtml(line)}</div>`
-    ).join('');
-    container.scrollTop = container.scrollHeight;
-
     if (pipWindow && !pipWindow.closed && pipCaptionEl) {
         pipCaptionEl.querySelector('.pip-placeholder')?.remove();
         const d = pipWindow.document.createElement('div');
@@ -2232,7 +2392,6 @@ function pushOverlayCaption(text) {
         while (pipCaptionEl.children.length > MAX_OVERLAY_LINES) {
             pipCaptionEl.removeChild(pipCaptionEl.firstChild);
         }
-        // Reclassify lines: latest = full white, recent = mid, rest = dimmed
         const lines = pipCaptionEl.querySelectorAll('.pip-line');
         lines.forEach((el, i) => {
             el.className = 'pip-line';
@@ -2240,40 +2399,6 @@ function pushOverlayCaption(text) {
             else if (i === lines.length - 2) el.classList.add('pip-recent');
         });
     }
-}
-
-function initOverlayDrag() {
-    const overlay = document.getElementById('floatingOverlay');
-    const handle = document.getElementById('overlayDragHandle');
-    if (!overlay || !handle) return;
-    if (overlay._dragInitialized) return;
-    overlay._dragInitialized = true;
-
-    let isDragging = false;
-    let startX = 0, startY = 0, startLeft = 0, startTop = 0;
-
-    handle.addEventListener('mousedown', (e) => {
-        if (e.target.classList.contains('overlay-btn')) return;
-        isDragging = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        const rect = overlay.getBoundingClientRect();
-        startLeft = rect.left;
-        startTop = rect.top;
-        e.preventDefault();
-    });
-
-    document.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
-        overlay.style.left = Math.max(0, Math.min(window.innerWidth - overlay.offsetWidth, startLeft + dx)) + 'px';
-        overlay.style.top = Math.max(0, Math.min(window.innerHeight - overlay.offsetHeight, startTop + dy)) + 'px';
-        overlay.style.transform = 'none';
-        overlay.style.bottom = 'auto';
-    });
-
-    document.addEventListener('mouseup', () => { isDragging = false; });
 }
 
 let pipFontLevel = 0;
@@ -2289,7 +2414,7 @@ async function openDocumentPiP() {
         return;
     }
     try {
-        pipWindow = await window.documentPictureInPicture.requestWindow({ width: 480, height: 200 });
+        pipWindow = await window.documentPictureInPicture.requestWindow({ width: 480, height: 320 });
 
         const style = pipWindow.document.createElement('style');
         style.textContent = `
@@ -2324,6 +2449,8 @@ async function openDocumentPiP() {
                 font-weight: 500;
                 letter-spacing: 0.04em;
                 text-transform: uppercase;
+                flex: 1;
+                min-width: 0;
             }
             #pipDot {
                 width: 7px; height: 7px;
@@ -2333,23 +2460,38 @@ async function openDocumentPiP() {
                 transition: background 0.4s;
             }
             #pipDot.recording { background: #f44; box-shadow: 0 0 6px #f44; animation: blink 1.2s infinite; }
+            #pipDot.paused { background: #f59e0b; }
             @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
-            #pipControls { display: flex; gap: 4px; }
+            #pipStatus { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            #pipTimer {
+                font-variant-numeric: tabular-nums;
+                font-size: 11px;
+                color: rgba(255,255,255,0.5);
+                letter-spacing: 0.06em;
+                flex-shrink: 0;
+                margin-right: 4px;
+            }
+            #pipControls { display: flex; gap: 4px; flex-shrink: 0; }
             .pip-btn {
                 background: rgba(255,255,255,0.1);
                 border: none;
-                color: rgba(255,255,255,0.6);
+                color: rgba(255,255,255,0.7);
                 cursor: pointer;
-                border-radius: 4px;
-                padding: 3px 8px;
+                border-radius: 5px;
+                padding: 3px 9px;
                 font-size: 11px;
                 font-family: inherit;
                 transition: background 0.15s, color 0.15s;
+                white-space: nowrap;
             }
-            .pip-btn:hover { background: rgba(255,255,255,0.22); color: #fff; }
+            .pip-btn:hover:not(:disabled) { background: rgba(255,255,255,0.22); color: #fff; }
+            .pip-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+            .pip-btn-record { background: rgba(239,68,68,0.25); color: #fca5a5; }
+            .pip-btn-record:hover:not(:disabled) { background: rgba(239,68,68,0.45); color: #fff; }
+            .pip-btn-stop { background: rgba(255,255,255,0.08); }
             #pipCaptions {
                 flex: 1;
-                padding: 10px 14px 12px;
+                padding: 10px 14px 10px;
                 overflow: hidden;
                 display: flex;
                 flex-direction: column;
@@ -2364,14 +2506,22 @@ async function openDocumentPiP() {
                 white-space: pre-wrap;
                 word-break: break-word;
             }
-            .pip-line.pip-latest {
-                color: #fff;
-                font-size: 1em;
-                font-weight: 500;
-            }
+            .pip-line.pip-latest { color: #fff; font-size: 1em; font-weight: 500; }
             .pip-line.pip-recent { color: rgba(255,255,255,0.65); }
             @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
             .pip-placeholder { color: rgba(255,255,255,0.2); font-size: 0.82em; font-style: italic; text-align: center; padding: 8px 0; }
+            #pipFooter {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 8px 10px;
+                border-top: 1px solid rgba(255,255,255,0.08);
+                background: rgba(255,255,255,0.04);
+                flex-shrink: 0;
+            }
+            #pipRecordBtn { flex: 1; padding: 6px 10px; font-size: 12px; border-radius: 6px; }
+            #pipStopBtn { flex: 1; padding: 6px 10px; font-size: 12px; border-radius: 6px; }
+            #pipBmkBtn { padding: 6px 8px; font-size: 12px; border-radius: 6px; }
         `;
         pipWindow.document.head.appendChild(style);
 
@@ -2380,8 +2530,9 @@ async function openDocumentPiP() {
         header.innerHTML = `
             <div id="pipLeft">
                 <div id="pipDot"></div>
-                <span>Live Captions</span>
+                <span id="pipStatus">Ready</span>
             </div>
+            <span id="pipTimer">00:00:00</span>
             <div id="pipControls">
                 <button class="pip-btn" id="pipFontBtn" title="Cycle font size">A+</button>
             </div>
@@ -2395,7 +2546,17 @@ async function openDocumentPiP() {
         }
         pipWindow.document.body.appendChild(pipCaptionEl);
 
-        // Populate existing lines
+        // Controls footer
+        const footer = pipWindow.document.createElement('div');
+        footer.id = 'pipFooter';
+        footer.innerHTML = `
+            <button class="pip-btn pip-btn-record" id="pipRecordBtn" title="Start / Pause / Resume recording">⏺ Start</button>
+            <button class="pip-btn pip-btn-stop" id="pipStopBtn" title="Stop and process" disabled>⏹ Stop &amp; Process</button>
+            <button class="pip-btn" id="pipBmkBtn" title="Drop bookmark (B)" disabled>📌</button>
+        `;
+        pipWindow.document.body.appendChild(footer);
+
+        // Populate existing caption lines
         if (overlayLines.length) {
             overlayLines.forEach((line, i) => {
                 const d = pipWindow.document.createElement('div');
@@ -2405,30 +2566,56 @@ async function openDocumentPiP() {
             });
         }
 
-        // Font size cycle
-        pipFontLevel = 0;
+        // Wire controls — closures run in main window context so they can call app functions directly
         pipWindow.document.getElementById('pipFontBtn').addEventListener('click', () => {
             pipFontLevel = (pipFontLevel + 1) % PIP_FONTS.length;
             pipCaptionEl.style.fontSize = PIP_FONTS[pipFontLevel];
         });
+        pipWindow.document.getElementById('pipRecordBtn').addEventListener('click', () => handleRecordButton());
+        pipWindow.document.getElementById('pipStopBtn').addEventListener('click', () => stopRecording());
+        pipWindow.document.getElementById('pipBmkBtn').addEventListener('click', () => dropBookmark());
 
-        // Recording dot state
-        const updateDot = () => {
-            const dot = pipWindow.document.getElementById('pipDot');
-            if (dot) dot.classList.toggle('recording', appState === 'recording');
-        };
-        updateDot();
-        pipWindow._dotInterval = pipWindow.setInterval(updateDot, 1000);
+        // Sync initial state
+        updatePiPControls();
 
         updatePiPButtonState(true);
         pipWindow.addEventListener('pagehide', () => {
-            if (pipWindow?._dotInterval) clearInterval(pipWindow._dotInterval);
             pipWindow = null;
             pipCaptionEl = null;
             updatePiPButtonState(false);
         });
     } catch (e) {
         showToast('Could not open pop-out: ' + e.message, 'error');
+    }
+}
+
+function updatePiPControls() {
+    if (!pipWindow || pipWindow.closed) return;
+    const pd = pipWindow.document;
+    const recBtn = pd.getElementById('pipRecordBtn');
+    const stopBtn = pd.getElementById('pipStopBtn');
+    const bmkBtn = pd.getElementById('pipBmkBtn');
+    const dot = pd.getElementById('pipDot');
+    const statusEl = pd.getElementById('pipStatus');
+
+    const isActive = appState === 'recording' || appState === 'paused';
+    if (stopBtn) stopBtn.disabled = !isActive;
+    if (bmkBtn) bmkBtn.disabled = !isActive;
+
+    if (recBtn) {
+        if (appState === 'recording') { recBtn.textContent = '⏸ Pause'; recBtn.disabled = false; }
+        else if (appState === 'paused') { recBtn.textContent = '▶ Resume'; recBtn.disabled = false; }
+        else if (appState === 'idle' || appState === 'done') { recBtn.textContent = '⏺ ' + (appState === 'done' ? 'New Rec' : 'Start'); recBtn.disabled = false; }
+        else { recBtn.textContent = '⏺ Start'; recBtn.disabled = true; }
+    }
+
+    if (dot) {
+        dot.classList.toggle('recording', appState === 'recording');
+        dot.classList.toggle('paused', appState === 'paused');
+    }
+    if (statusEl) {
+        const labels = { idle: 'Ready', recording: 'Recording', paused: 'Paused', processing: 'Processing…', stopping: 'Stopping…', done: 'Done' };
+        statusEl.textContent = labels[appState] || appState;
     }
 }
 
@@ -2516,10 +2703,107 @@ async function autoCleanupMeetings() {
         const all = await getAllMeetings(); // newest-first
         const toDelete = all.slice(limit);
         for (const m of toDelete) await deleteMeeting(m.id);
-        if (toDelete.length) renderMeetingHistory();
+        if (toDelete.length) loadMeetingHistory();
     } catch (e) {
         console.warn('[AutoCleanup] failed:', e);
     }
+}
+
+// ==================== FOLLOW-UP EMAIL ====================
+async function generateFollowUpEmail() {
+    if (!meetingData.transcript.length) { showToast('No meeting data to generate email from.', 'warning'); return; }
+    document.getElementById('emailModal').style.display = 'flex';
+    document.getElementById('emailGenerating').style.display = 'block';
+    document.getElementById('emailDraftContent').value = '';
+
+    const title = document.getElementById('meetingTitle')?.value || 'Meeting';
+    const date = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const summary = meetingData.summary || '';
+    const decisions = meetingData.keyDecisions?.join('\n- ') || '';
+    const actions = meetingData.actionItems?.join('\n- ') || '';
+    const next = meetingData.nextSteps?.join('\n- ') || '';
+
+    const prompt = `Write a professional follow-up email for the meeting below. The email should be concise, clear, and ready to send. Use a professional but approachable tone. Do not add placeholder text like [Your Name] — just write the body.
+
+Meeting: ${title}
+Date: ${date}
+
+Summary: ${summary}
+
+Key Decisions:
+${decisions ? '- ' + decisions : 'None'}
+
+Action Items:
+${actions ? '- ' + actions : 'None'}
+
+Next Steps:
+${next ? '- ' + next : 'None'}
+
+Write the subject line first (prefixed with "Subject: "), then a blank line, then the email body. Sign off with "Best regards."`;
+
+    const llmProvider = localStorage.getItem('llm_provider') || 'groq';
+    let draft = '';
+
+    try {
+        if (llmProvider === 'groq') {
+            const key = localStorage.getItem('groq_api_key');
+            if (!key) throw new Error('Groq API key required');
+            const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], temperature: 0.5, max_tokens: 1024 }),
+                signal: AbortSignal.timeout(30000)
+            });
+            const data = await resp.json();
+            draft = data.choices?.[0]?.message?.content || '';
+        } else if (llmProvider === 'anthropic') {
+            const key = localStorage.getItem('anthropic_api_key');
+            if (!key) throw new Error('Anthropic API key required');
+            const resp = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
+                body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1024, messages: [{ role: 'user', content: prompt }] }),
+                signal: AbortSignal.timeout(30000)
+            });
+            const data = await resp.json();
+            draft = data.content?.[0]?.text || '';
+        } else if (llmProvider === 'ollama' && ollamaConnected) {
+            const model = document.getElementById('ollamaModel')?.value || 'llama3.2';
+            const resp = await fetch(OLLAMA_API + '/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false }),
+                signal: AbortSignal.timeout(30000)
+            });
+            const data = await resp.json();
+            draft = data.message?.content || '';
+        } else {
+            // Fallback: build a plain-text draft without AI
+            draft = `Subject: Follow-Up: ${title} — ${date}\n\nHi Team,\n\nThank you for joining today's meeting. Here is a brief recap:\n\n${summary}\n\n${decisions ? 'Key Decisions:\n- ' + decisions + '\n\n' : ''}${actions ? 'Action Items:\n- ' + actions + '\n\n' : ''}${next ? 'Next Steps:\n- ' + next + '\n\n' : ''}Please reach out if you have any questions.\n\nBest regards.`;
+        }
+    } catch (e) {
+        showToast('Email draft failed: ' + e.message, 'error');
+        draft = `Subject: Follow-Up: ${title}\n\nUnable to generate AI draft. Check your API key in Settings.\n\nSummary: ${summary}`;
+    }
+
+    document.getElementById('emailGenerating').style.display = 'none';
+    document.getElementById('emailDraftContent').value = draft.trim();
+}
+
+function closeEmailModal() { document.getElementById('emailModal').style.display = 'none'; }
+
+function copyEmailDraft() {
+    const text = document.getElementById('emailDraftContent').value;
+    navigator.clipboard.writeText(text).then(() => showToast('Email copied to clipboard!', 'success')).catch(() => showToast('Copy failed.', 'error'));
+}
+
+function openMailto() {
+    const text = document.getElementById('emailDraftContent').value;
+    const lines = text.split('\n');
+    const subjectLine = lines.find(l => l.startsWith('Subject:'));
+    const subject = subjectLine ? subjectLine.replace('Subject:', '').trim() : 'Meeting Follow-Up';
+    const body = lines.filter(l => !l.startsWith('Subject:')).join('\n').trim();
+    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 function exportMeetingMarkdown() {
@@ -2549,12 +2833,58 @@ function exportMeetingMarkdown() {
     showToast('Exported markdown!', 'success');
 }
 
+function exportBilingualTranscript() {
+    if (!meetingData.transcript.length) { showToast('No transcript to export.', 'warning'); return; }
+    const ts = new Date().toISOString().slice(0, 10);
+    const title = document.getElementById('meetingTitle')?.value || 'Meeting';
+    const hasAnyTranslation = meetingData.transcript.some(s => s.translated);
+
+    let md = `# Bilingual Transcript — ${title}\n\n`;
+    md += `**Date:** ${new Date().toLocaleDateString()}\n\n---\n\n`;
+
+    if (hasAnyTranslation) {
+        md += `| Time | Speaker | Original | Translation |\n`;
+        md += `|------|---------|----------|-------------|\n`;
+        meetingData.transcript.forEach(seg => {
+            const sanitize = s => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+            const orig = sanitize(seg.corrected || seg.original);
+            const trans = sanitize(seg.translated || seg.corrected || seg.original);
+            const speaker = seg.speaker ? sanitize(seg.speaker) : '—';
+            md += `| ${seg.timestamp} | ${speaker} | ${orig} | ${trans} |\n`;
+        });
+    } else {
+        // No translations yet — export as single-column with timestamps
+        md += `> No translations available. Run a recording with Translation enabled to get bilingual output.\n\n`;
+        md += `| Time | Speaker | Transcript |\n`;
+        md += `|------|---------|------------|\n`;
+        meetingData.transcript.forEach(seg => {
+            const sanitize = s => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+            const txt = sanitize(seg.corrected || seg.original);
+            const speaker = seg.speaker ? sanitize(seg.speaker) : '—';
+            md += `| ${seg.timestamp} | ${speaker} | ${txt} |\n`;
+        });
+    }
+
+    downloadBlob(md, `${title.replace(/\s+/g, '_')}_bilingual_${ts}.md`, 'text/markdown');
+    showToast('Bilingual transcript exported!', 'success');
+}
+
 function generateTranscriptMarkdown() {
     let md = '# Transcript\n\nDate: ' + new Date().toLocaleDateString() + '\n\n---\n\n';
+    const bookmarks = (meetingData.bookmarks || []).slice().sort((a, b) => a.startSeconds - b.startSeconds);
+    let bIdx = 0;
     meetingData.transcript.forEach(seg => {
+        while (bIdx < bookmarks.length && bookmarks[bIdx].startSeconds <= (seg.startSeconds ?? Infinity)) {
+            const bk = bookmarks[bIdx++];
+            md += `\n---\n\n📌 **Bookmark [${bk.ts}]**${bk.label ? ': ' + bk.label : ''}\n\n---\n\n`;
+        }
         const text = seg.corrected || seg.original;
         md += `### [${seg.timestamp}]\n\n**Original:** ${text}\n\n` + (seg.translated ? `**Translation:** ${seg.translated}\n\n` : '') + '---\n\n';
     });
+    while (bIdx < bookmarks.length) {
+        const bk = bookmarks[bIdx++];
+        md += `\n---\n\n📌 **Bookmark [${bk.ts}]**${bk.label ? ': ' + bk.label : ''}\n\n---\n\n`;
+    }
     return md;
 }
 
@@ -2577,6 +2907,94 @@ function generateActionsMarkdown() {
         return line;
     });
     return '# Action Items\n\n' + lines.join('\n');
+}
+
+// ==================== WEBHOOK PUSH ====================
+function _buildWebhookPayload() {
+    const title = document.getElementById('meetingTitle')?.value || 'Untitled Meeting';
+    const duration = document.getElementById('timer')?.textContent || '';
+    return {
+        event: 'meeting_ended',
+        timestamp: new Date().toISOString(),
+        title,
+        duration,
+        summary: meetingData.summary || '',
+        keyPoints: meetingData.keyPoints || [],
+        keyDecisions: meetingData.keyDecisions || [],
+        actionItems: meetingData.actionItems || [],
+        nextSteps: meetingData.nextSteps || [],
+        bookmarks: (meetingData.bookmarks || []).map(b => ({ timestamp: b.ts, label: b.label || '' })),
+        transcript: meetingData.transcript.map(s => ({
+            timestamp: s.timestamp,
+            speaker: s.speaker || null,
+            text: s.corrected || s.original,
+            translated: s.translated || null
+        }))
+    };
+}
+
+async function pushWebhook() {
+    const url = localStorage.getItem('webhook_url');
+    if (!url) return;
+    try {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(_buildWebhookPayload())
+        });
+        if (resp.ok) {
+            showToast('📡 Webhook sent successfully', 'success');
+        } else {
+            showToast(`Webhook failed: HTTP ${resp.status}`, 'error');
+        }
+    } catch (e) {
+        showToast('Webhook error: ' + e.message, 'error');
+    }
+}
+
+async function testWebhook() {
+    const urlEl = document.getElementById('webhookUrl');
+    const url = urlEl?.value?.trim();
+    if (!url) { showToast('Enter a webhook URL first', 'warning'); return; }
+    const testBtn = document.getElementById('webhookTestBtn');
+    if (testBtn) { testBtn.disabled = true; testBtn.textContent = 'Sending…'; }
+    try {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event: 'test', timestamp: new Date().toISOString(), message: 'Meeting Notes AI webhook test' })
+        });
+        showToast(resp.ok ? '✅ Webhook test succeeded' : `Test failed: HTTP ${resp.status}`, resp.ok ? 'success' : 'error');
+    } catch (e) {
+        showToast('Webhook test error: ' + e.message, 'error');
+    } finally {
+        if (testBtn) { testBtn.disabled = false; testBtn.textContent = 'Test'; }
+    }
+}
+
+// ==================== BOOKMARKS ====================
+function dropBookmark(label) {
+    if (appState !== 'recording' && appState !== 'paused') {
+        showToast('Start recording first to drop a bookmark.', 'warning');
+        return;
+    }
+    const elapsed = getElapsedSeconds();
+    const ts = formatTime(elapsed);
+    const bookmark = { ts, startSeconds: elapsed, label: label || '' };
+    if (!meetingData.bookmarks) meetingData.bookmarks = [];
+    meetingData.bookmarks.push(bookmark);
+
+    const container = document.getElementById('liveTranscript');
+    if (container) {
+        const placeholder = container.querySelector('.placeholder');
+        if (placeholder) placeholder.remove();
+        const marker = document.createElement('div');
+        marker.className = 'bookmark-marker';
+        marker.innerHTML = `<span class="bookmark-pin">📌</span><span class="bookmark-ts">${ts}</span>${label ? `<span class="bookmark-label">${escapeHtml(label)}</span>` : ''}`;
+        container.appendChild(marker);
+        container.scrollTop = container.scrollHeight;
+    }
+    showToast(`📌 Bookmark at ${ts}`, 'success');
 }
 
 function downloadBlob(content, filename, type) {
@@ -3036,6 +3454,14 @@ document.addEventListener('keydown', (e) => {
             undoLastEdit();
         }
     }
+    if ((e.key === 'b' || e.key === 'B') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return;
+        if (appState === 'recording' || appState === 'paused') {
+            e.preventDefault();
+            dropBookmark();
+        }
+    }
 });
 
 // ==================== MEETING HISTORY ====================
@@ -3060,25 +3486,38 @@ function closeHistorySidebar() {
 
 async function loadMeetingHistory() {
     const container = document.getElementById('historyList');
-    const query = document.getElementById('historySearch')?.value || '';
+    const query = (document.getElementById('historySearch')?.value || '').trim();
+    const scopeHint = document.getElementById('searchScopeHint');
+    if (scopeHint) scopeHint.style.display = query ? 'block' : 'none';
     try {
         const meetings = await searchMeetings(query);
         if (!meetings.length) {
-            container.innerHTML = '<div class="history-empty"><p>No meetings saved yet.</p><p class="history-empty-hint">Record a meeting and it will appear here.</p></div>';
+            container.innerHTML = query
+                ? `<div class="history-empty"><p>No matches for "<strong>${escapeHtml(query)}</strong>"</p><p class="history-empty-hint">Try a different keyword — searches titles, transcripts, summaries, and action items.</p></div>`
+                : '<div class="history-empty"><p>No meetings saved yet.</p><p class="history-empty-hint">Record a meeting and it will appear here.</p></div>';
             return;
         }
         container.innerHTML = meetings.map(m => {
             const date = new Date(m.timestamp);
             const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
             const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-            const preview = (m.summary || m.fullTranscript || '').slice(0, 80) + '…';
+            const titleHTML = query ? _highlightQuery(m.title || 'Untitled Meeting', query) : escapeHtml(m.title || 'Untitled Meeting');
+            let previewHTML;
+            if (query) {
+                const snippets = _getMeetingMatchSnippets(m, query);
+                previewHTML = snippets.length
+                    ? snippets.map(s => `<div class="search-snippet"><span class="search-snippet-label">${escapeHtml(s.label)}:</span> ${_highlightQuery(s.snippet, query)}</div>`).join('')
+                    : `<div class="history-preview">${escapeHtml((m.summary || m.fullTranscript || '').slice(0, 80))}…</div>`;
+            } else {
+                previewHTML = `<div class="history-preview">${escapeHtml((m.summary || m.fullTranscript || '').slice(0, 80))}…</div>`;
+            }
             return `<div class="history-item" onclick="loadMeetingFromHistory('${m.id}')">
                 <div class="history-item-header">
-                    <span class="history-title">${escapeHtml(m.title || 'Untitled Meeting')}</span>
+                    <span class="history-title">${titleHTML}</span>
                     <span class="history-duration">${m.duration || '--:--'}</span>
                 </div>
                 <div class="history-meta">${dateStr} at ${timeStr}</div>
-                <div class="history-preview">${escapeHtml(preview)}</div>
+                ${previewHTML}
                 <div class="history-actions">
                     <button class="btn btn-small btn-secondary" onclick="event.stopPropagation();renameMeeting('${m.id}')">Rename</button>
                     <button class="btn btn-small btn-danger" onclick="event.stopPropagation();confirmDeleteMeeting('${m.id}')">Delete</button>
@@ -3097,13 +3536,15 @@ async function loadMeetingFromHistory(id) {
         currentMeetingId = id;
         meetingData = {
             transcript: meeting.transcript || [],
+            bookmarks: meeting.bookmarks || [],
             fullTranscript: meeting.fullTranscript || '',
             summary: meeting.summary || '',
             keyPoints: meeting.keyPoints || [],
             keyDecisions: meeting.keyDecisions || [],
             actionItems: meeting.actionItems || [],
             actionItemsChecked: meeting.actionItemsChecked || [],
-            nextSteps: meeting.nextSteps || []
+            nextSteps: meeting.nextSteps || [],
+            citations: null
         };
         displayResults();
         closeHistorySidebar();
@@ -3129,7 +3570,8 @@ async function saveCurrentMeeting() {
     }
 
     const meeting = { id, title, timestamp: savedTimestamp, duration,
-        transcript: meetingData.transcript, fullTranscript: meetingData.fullTranscript,
+        transcript: meetingData.transcript, bookmarks: meetingData.bookmarks || [],
+        fullTranscript: meetingData.fullTranscript,
         summary: meetingData.summary, keyPoints: meetingData.keyPoints,
         keyDecisions: meetingData.keyDecisions, actionItems: meetingData.actionItems,
         actionItemsChecked: meetingData.actionItemsChecked || [],
@@ -3167,7 +3609,11 @@ async function confirmDeleteMeeting(id) {
     } catch (e) { showToast('Failed to delete', 'error'); }
 }
 
-function filterMeetingHistory() { loadMeetingHistory(); }
+let _historySearchTimer = null;
+function filterMeetingHistory() {
+    clearTimeout(_historySearchTimer);
+    _historySearchTimer = setTimeout(loadMeetingHistory, 260);
+}
 
 async function exportAllMeetings() {
     const meetings = await getAllMeetings();
@@ -3226,7 +3672,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadMeetingTitle();
     loadSettings();
     initSpeakers();
-    initOverlayDrag();
     setAppState('idle');
     // Must be served via http(s):// — Web Speech API is blocked on file://
     if (window.location.protocol === 'file:') {
