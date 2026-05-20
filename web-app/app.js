@@ -57,6 +57,84 @@ let meetingData = {
     citations: null
 };
 
+// ==================== UI LANGUAGE (i18n) ====================
+const UI_STRINGS = {
+    en: {
+        headerTitle: 'Meeting Notes AI',
+        tabTranscript: 'Transcript', tabSummary: 'Summary', tabActions: 'Action Items',
+        labelSpeakingLang: 'Speaking Language', labelTranslateTo: 'Translate To',
+        btnSaveClaude: '↗ Save to Claude Project', btnSaveMiTAC: '↗ Save to MiTAC GPT',
+        btnExportMarkdown: '📤 Export Markdown', btnGenerateEmail: '✉️ Follow-Up Email',
+        stopBtnText: 'Stop & Process',
+        recIdle: 'Start Recording', recDone: 'New Recording', recPause: 'Pause', recResume: 'Resume', recProcessing: 'Processing…',
+        statusIdle: 'Ready to record', statusDone: 'Completed', statusRecording: 'Recording & Transcribing…', statusPaused: 'Paused', statusProcessing: 'Processing…',
+        pipReady: 'Ready', pipRecording: 'Recording', pipPaused: 'Paused', pipProcessing: 'Processing…', pipStopping: 'Stopping…', pipDone: 'Done',
+        placeholderMeetingTitle: 'Untitled Meeting',
+    },
+    'zh-TW': {
+        headerTitle: 'AI 會議記錄',
+        tabTranscript: '逐字稿', tabSummary: '摘要', tabActions: '行動項目',
+        labelSpeakingLang: '說話語言', labelTranslateTo: '翻譯至',
+        btnSaveClaude: '↗ 儲存至 Claude', btnSaveMiTAC: '↗ 儲存至 MiTAC GPT',
+        btnExportMarkdown: '📤 匯出 Markdown', btnGenerateEmail: '✉️ 後續追蹤信',
+        stopBtnText: '停止並處理',
+        recIdle: '開始錄音', recDone: '新錄音', recPause: '暫停', recResume: '繼續', recProcessing: '處理中…',
+        statusIdle: '準備錄音', statusDone: '已完成', statusRecording: '錄音與轉錄中…', statusPaused: '已暫停', statusProcessing: '處理中…',
+        pipReady: '就緒', pipRecording: '錄音中', pipPaused: '已暫停', pipProcessing: '處理中…', pipStopping: '停止中…', pipDone: '完成',
+        placeholderMeetingTitle: '未命名會議',
+    }
+};
+
+function t(key) {
+    const lang = localStorage.getItem('ui_lang') || 'en';
+    return UI_STRINGS[lang]?.[key] ?? UI_STRINGS.en[key] ?? key;
+}
+
+function applyUiLanguage(lang) {
+    const s = UI_STRINGS[lang] || UI_STRINGS.en;
+    const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    set('headerTitle', s.headerTitle);
+    set('tabTranscript', s.tabTranscript);
+    set('tabSummary', s.tabSummary);
+    set('tabActions', s.tabActions);
+    set('labelSpeakingLang', s.labelSpeakingLang);
+    set('labelTranslateTo', s.labelTranslateTo);
+    set('btnSaveClaude', s.btnSaveClaude);
+    set('btnSaveMiTAC', s.btnSaveMiTAC);
+    set('btnExportMarkdown', s.btnExportMarkdown);
+    set('btnGenerateEmail', s.btnGenerateEmail);
+    set('stopBtnText', s.stopBtnText);
+    const titleInput = document.getElementById('meetingTitle');
+    if (titleInput && !titleInput.value) titleInput.placeholder = s.placeholderMeetingTitle;
+    const langBtn = document.getElementById('langToggleBtn');
+    if (langBtn) langBtn.textContent = lang === 'zh-TW' ? '繁中' : 'EN';
+    // Sync recording button text to current state
+    const textEl = document.getElementById('recordBtnText');
+    if (textEl) {
+        const state = getAppState();
+        if (state === 'idle') textEl.textContent = s.recIdle;
+        else if (state === 'done') textEl.textContent = s.recDone;
+        else if (state === 'recording') textEl.textContent = s.recPause;
+        else if (state === 'paused') textEl.textContent = s.recResume;
+    }
+    const statusText = document.getElementById('statusText');
+    if (statusText) {
+        const state = getAppState();
+        if (state === 'idle') statusText.textContent = s.statusIdle;
+        else if (state === 'done') statusText.textContent = s.statusDone;
+        else if (state === 'recording') statusText.textContent = s.statusRecording;
+        else if (state === 'paused') statusText.textContent = s.statusPaused;
+        else if (state === 'processing') statusText.textContent = s.statusProcessing;
+    }
+}
+
+function toggleUiLanguage() {
+    const current = localStorage.getItem('ui_lang') || 'en';
+    const next = current === 'en' ? 'zh-TW' : 'en';
+    localStorage.setItem('ui_lang', next);
+    applyUiLanguage(next);
+}
+
 // ==================== QE SYSTEM PROMPT ====================
 const QE_SYSTEM_PROMPT = `You are an expert meeting analyst. Analyze this meeting transcript and respond ONLY with valid JSON. Be COMPREHENSIVE and detailed — err on the side of MORE detail, never summarize too briefly. Capture EVERY topic, decision, concern, and action discussed.
 
@@ -974,14 +1052,14 @@ function getLanguageFlag(code) {
 }
 
 function getLanguageName(code) {
-    const map = { 'chinese': '中文', 'zh': '中文', 'zh-tw': '台灣中文', 'tw': '台灣中文',
+    const map = { 'chinese': '中文', 'zh': '中文', 'zh-tw': '繁體中文', 'zh-TW': '繁體中文', 'tw': '繁體中文',
         'english': 'English', 'en': 'English',
         'japanese': '日本語', 'ja': '日本語', 'korean': '한국어', 'ko': '한국어',
         'tagalog': 'Filipino', 'tl': 'Filipino', 'spanish': 'Español', 'es': 'Español',
         'french': 'Français', 'fr': 'Français', 'german': 'Deutsch', 'de': 'Deutsch',
         'arabic': 'العربية', 'ar': 'العربية', 'portuguese': 'Português', 'pt': 'Português',
         'hindi': 'हिन्दी', 'hi': 'हिन्दी' };
-    return map[code?.toLowerCase()] || code || '';
+    return map[code] || map[code?.toLowerCase()] || code || '';
 }
 
 function detectTextLanguage(text) {
@@ -1159,7 +1237,7 @@ function addTranscriptSegment(text, source = 'mic') {
 
     meetingData.transcript.push(seg);
     meetingData.fullTranscript += displayText + ' ';
-    pushOverlayCaption(displayText);
+    pushOverlayCaption(displayText, seg.id);
     displaySegment(seg);
 
     const tgtLang = localStorage.getItem('target_lang') || 'en';
@@ -1184,6 +1262,7 @@ function addTranscriptSegment(text, source = 'mic') {
                     if (result) {
                         span.textContent = result + ' ';
                         seg.translated = result;
+                        updateOverlayTranslation(segmentId, result);
                     }
                 }
             }).catch(() => {
@@ -1196,6 +1275,7 @@ function addTranscriptSegment(text, source = 'mic') {
                     seg.translated = tr;
                     const el = document.getElementById('trans-' + segmentId);
                     if (el && document.contains(el)) updateSegmentTranslation(segmentId, tr);
+                    updateOverlayTranslation(segmentId, tr);
                 } else {
                     const el = document.getElementById('trans-' + segmentId);
                     if (el) el.style.display = 'none';
@@ -1535,40 +1615,40 @@ function updateRecordingUI() {
         case 'idle':
         case 'done':
             iconEl.textContent = '⏺';
-            textEl.textContent = appState === 'done' ? 'New Recording' : 'Start Recording';
+            textEl.textContent = appState === 'done' ? t('recDone') : t('recIdle');
             if (statusDot) statusDot.className = 'status-dot';
-            if (statusText) statusText.textContent = appState === 'done' ? 'Completed' : 'Ready to record';
+            if (statusText) statusText.textContent = appState === 'done' ? t('statusDone') : t('statusIdle');
             stopBtn.disabled = true;
             recordBtn.disabled = false;
             if (bookmarkBtn) bookmarkBtn.disabled = true;
             break;
         case 'recording':
             iconEl.textContent = '⏸';
-            textEl.textContent = 'Pause';
+            textEl.textContent = t('recPause');
             recordBtn.classList.add('recording');
             recordBtn.disabled = false;
             if (statusDot) { statusDot.className = 'status-dot'; statusDot.classList.add('recording'); }
-            if (statusText) statusText.textContent = 'Recording & Transcribing…';
+            if (statusText) statusText.textContent = t('statusRecording');
             stopBtn.disabled = false;
             if (bookmarkBtn) bookmarkBtn.disabled = false;
             break;
         case 'paused':
             iconEl.textContent = '▶';
-            textEl.textContent = 'Resume';
+            textEl.textContent = t('recResume');
             recordBtn.classList.add('paused');
             recordBtn.disabled = false;
             if (statusDot) { statusDot.className = 'status-dot'; statusDot.classList.add('paused'); }
-            if (statusText) statusText.textContent = 'Paused';
+            if (statusText) statusText.textContent = t('statusPaused');
             stopBtn.disabled = false;
             if (bookmarkBtn) bookmarkBtn.disabled = false;
             break;
         case 'processing':
             iconEl.textContent = '⏺';
-            textEl.textContent = 'Processing…';
+            textEl.textContent = t('recProcessing');
             recordBtn.disabled = true;
             stopBtn.disabled = true;
             if (bookmarkBtn) bookmarkBtn.disabled = true;
-            if (statusText) statusText.textContent = 'Processing…';
+            if (statusText) statusText.textContent = t('statusProcessing');
             break;
     }
     updatePiPControls();
@@ -1754,7 +1834,10 @@ async function claudeTranslateSegment(text) {
             }),
             signal: AbortSignal.timeout(15000)
         });
-        if (!resp.ok) return null;
+        if (!resp.ok) {
+            if (resp.status !== 429) console.warn('[Claude translate] HTTP', resp.status, '— check CLAUDE_TRANSLATE_MODEL is a valid model ID');
+            return null;
+        }
         const data = await resp.json();
         const result = data.content?.[0]?.text?.trim();
         return result || null;
@@ -2377,26 +2460,53 @@ function startNewMeeting() {
 let pipWindow = null;
 let pipCaptionEl = null;
 const MAX_OVERLAY_LINES = 5;
-let overlayLines = [];
+let overlayLines = []; // items: { original, translated, segId }
 
-function pushOverlayCaption(text) {
+let pipViewMode = 'original'; // 'original' | 'translation' | 'both'
+const PIP_VIEW_MODES = ['original', 'translation', 'both'];
+const PIP_VIEW_LABELS = { original: 'Orig', translation: 'Trans', both: 'Orig+Trans' };
+
+function getOverlayLineText(item) {
+    if (pipViewMode === 'translation') return item.translated ?? item.original;
+    if (pipViewMode === 'both') return item.original + (item.translated ? '\n→ ' + item.translated : '');
+    return item.original;
+}
+
+function refreshPiPCaptions() {
+    if (!pipWindow || pipWindow.closed || !pipCaptionEl) return;
+    const lines = pipCaptionEl.querySelectorAll('.pip-line');
+    lines.forEach((el, i) => {
+        const item = overlayLines[i];
+        if (item) el.textContent = getOverlayLineText(item);
+    });
+}
+
+function updateOverlayTranslation(segId, translated) {
+    const item = overlayLines.find(x => x.segId === segId);
+    if (!item) return;
+    item.translated = translated;
+    refreshPiPCaptions();
+}
+
+function pushOverlayCaption(text, segId) {
     if (!text?.trim()) return;
-    overlayLines.push(text);
+    const item = { original: text, translated: null, segId: segId ?? -1 };
+    overlayLines.push(item);
     if (overlayLines.length > MAX_OVERLAY_LINES) overlayLines.shift();
     if (pipWindow && !pipWindow.closed && pipCaptionEl) {
         pipCaptionEl.querySelector('.pip-placeholder')?.remove();
         const d = pipWindow.document.createElement('div');
         d.className = 'pip-line';
-        d.textContent = text;
+        d.textContent = getOverlayLineText(item);
         pipCaptionEl.appendChild(d);
         while (pipCaptionEl.children.length > MAX_OVERLAY_LINES) {
             pipCaptionEl.removeChild(pipCaptionEl.firstChild);
         }
-        const lines = pipCaptionEl.querySelectorAll('.pip-line');
-        lines.forEach((el, i) => {
+        const els = pipCaptionEl.querySelectorAll('.pip-line');
+        els.forEach((el, i) => {
             el.className = 'pip-line';
-            if (i === lines.length - 1) el.classList.add('pip-latest');
-            else if (i === lines.length - 2) el.classList.add('pip-recent');
+            if (i === els.length - 1) el.classList.add('pip-latest');
+            else if (i === els.length - 2) el.classList.add('pip-recent');
         });
     }
 }
@@ -2534,6 +2644,7 @@ async function openDocumentPiP() {
             </div>
             <span id="pipTimer">00:00:00</span>
             <div id="pipControls">
+                <button class="pip-btn" id="pipViewBtn" title="Toggle caption mode: Original / Translation / Both">${PIP_VIEW_LABELS[pipViewMode]}</button>
                 <button class="pip-btn" id="pipFontBtn" title="Cycle font size">A+</button>
             </div>
         `;
@@ -2558,15 +2669,22 @@ async function openDocumentPiP() {
 
         // Populate existing caption lines
         if (overlayLines.length) {
-            overlayLines.forEach((line, i) => {
+            overlayLines.forEach((item, i) => {
                 const d = pipWindow.document.createElement('div');
                 d.className = 'pip-line' + (i === overlayLines.length - 1 ? ' pip-latest' : i >= overlayLines.length - 2 ? ' pip-recent' : '');
-                d.textContent = line;
+                d.textContent = getOverlayLineText(item);
                 pipCaptionEl.appendChild(d);
             });
         }
 
         // Wire controls — closures run in main window context so they can call app functions directly
+        pipWindow.document.getElementById('pipViewBtn').addEventListener('click', () => {
+            const idx = PIP_VIEW_MODES.indexOf(pipViewMode);
+            pipViewMode = PIP_VIEW_MODES[(idx + 1) % PIP_VIEW_MODES.length];
+            const btn = pipWindow?.document?.getElementById('pipViewBtn');
+            if (btn) btn.textContent = PIP_VIEW_LABELS[pipViewMode];
+            refreshPiPCaptions();
+        });
         pipWindow.document.getElementById('pipFontBtn').addEventListener('click', () => {
             pipFontLevel = (pipFontLevel + 1) % PIP_FONTS.length;
             pipCaptionEl.style.fontSize = PIP_FONTS[pipFontLevel];
@@ -2614,7 +2732,7 @@ function updatePiPControls() {
         dot.classList.toggle('paused', appState === 'paused');
     }
     if (statusEl) {
-        const labels = { idle: 'Ready', recording: 'Recording', paused: 'Paused', processing: 'Processing…', stopping: 'Stopping…', done: 'Done' };
+        const labels = { idle: t('pipReady'), recording: t('pipRecording'), paused: t('pipPaused'), processing: t('pipProcessing'), stopping: t('pipStopping'), done: t('pipDone') };
         statusEl.textContent = labels[appState] || appState;
     }
 }
@@ -2692,6 +2810,37 @@ function resetClaudeProjectUrl() {
     if (!trimmed.startsWith('https://claude.ai')) { showToast('Invalid URL — must start with https://claude.ai', 'error'); return; }
     localStorage.setItem('claude_project_url', trimmed);
     showToast('Claude Project URL updated!', 'success');
+}
+
+// ==================== MITAC GPT EXPORT ====================
+
+function saveToMiTACGPT() {
+    let url = localStorage.getItem('mitac_gpt_url');
+    if (!url) {
+        url = window.prompt('Paste your MiTAC GPT URL (e.g. https://gpt.mitac.com/…):');
+        if (!url) return;
+        url = url.trim();
+        if (!url.startsWith('https://')) {
+            showToast('Invalid URL — must start with https://', 'error');
+            return;
+        }
+        localStorage.setItem('mitac_gpt_url', url);
+    }
+    const title = (document.getElementById('meetingTitle')?.value?.trim() || 'Meeting').replace(/[\\/:*?"<>|]/g, '_');
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `${title}_${date}.md`;
+    downloadBlob(buildProjectTranscriptMd(), filename, 'text/markdown');
+    window.open(url, '_blank');
+    showToast('Transcript saved! Upload the file to MiTAC GPT.', 'success');
+}
+
+function resetMiTACGptUrl() {
+    const url = window.prompt('Paste your MiTAC GPT URL:', localStorage.getItem('mitac_gpt_url') || '');
+    if (!url) return;
+    const trimmed = url.trim();
+    if (!trimmed.startsWith('https://')) { showToast('Invalid URL — must start with https://', 'error'); return; }
+    localStorage.setItem('mitac_gpt_url', trimmed);
+    showToast('MiTAC GPT URL updated!', 'success');
 }
 
 // ==================== AUTO CLEANUP ====================
@@ -3669,6 +3818,7 @@ async function importMeetingsFromFile(event) {
 document.addEventListener('DOMContentLoaded', async () => {
     try { await initDB(); } catch (e) { console.error('DB init failed:', e); }
     loadTheme();
+    applyUiLanguage(localStorage.getItem('ui_lang') || 'en');
     loadMeetingTitle();
     loadSettings();
     initSpeakers();
