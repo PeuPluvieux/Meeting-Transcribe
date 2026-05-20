@@ -76,6 +76,7 @@ const UI_STRINGS = {
         bookmarkBtn: '📌 Bookmark',
         addMeetingAudio: '🖥️ Add Meeting Audio',
         transcriptPlaceholder: 'Transcript will appear here as you speak…',
+        transcribingMeetingAudio: 'Transcribing meeting audio…',
         transcriptTabHeader: 'Full Transcript', editHint: 'Double-click to edit',
         summaryTabHeader: 'Meeting Summary', actionsTabHeader: 'Action Items',
         btnCopy: '📋 Copy', btnDownload: '⬇️ Download', btnBilingual: '📄 Bilingual',
@@ -98,6 +99,7 @@ const UI_STRINGS = {
         bookmarkBtn: '📌 書籤',
         addMeetingAudio: '🖥️ 加入會議音訊',
         transcriptPlaceholder: '開始說話後，逐字稿將顯示於此…',
+        transcribingMeetingAudio: '正在轉錄會議音訊…',
         transcriptTabHeader: '完整逐字稿', editHint: '雙擊可編輯',
         summaryTabHeader: '會議摘要', actionsTabHeader: '行動項目',
         btnCopy: '📋 複製', btnDownload: '⬇️ 下載', btnBilingual: '📄 雙語',
@@ -568,6 +570,7 @@ async function startSystemAudioCapture() {
         systemAudioRecorderActive = true;
         systemAudioRecorder.start(SYSTEM_AUDIO_CHUNK_MS);
         systemAudioChunkStartTime = Date.now();
+        showSystemAudioIndicator();
         systemAudioChunkTimer = setInterval(() => {
             if (systemAudioRecorder?.state === 'recording') {
                 systemAudioRecorder.stop();
@@ -575,6 +578,7 @@ async function startSystemAudioCapture() {
                     if (appState === 'recording' && systemAudioActive) {
                         systemAudioRecorder.start(SYSTEM_AUDIO_CHUNK_MS);
                         systemAudioChunkStartTime = Date.now();
+                        showSystemAudioIndicator();
                     }
                 }, 200);
             }
@@ -600,6 +604,7 @@ async function startSystemAudioCapture() {
 function stopSystemAudioCapture() {
     systemAudioRecorderActive = false;
     clearInterval(systemAudioChunkTimer); systemAudioChunkTimer = null;
+    removeSystemAudioIndicator();
     if (systemAudioRecorder) {
         try { if (systemAudioRecorder.state !== 'inactive') systemAudioRecorder.stop(); } catch (e) {}
         systemAudioRecorder = null;
@@ -651,6 +656,7 @@ async function transcribeLocalWhisper(blob) {
 }
 
 async function transcribeSystemAudioChunk(blob) {
+    removeSystemAudioIndicator();
     const meetingProvider = localStorage.getItem('meeting_transcription_provider') || 'groq';
     if (meetingProvider === 'local') { await transcribeLocalWhisper(blob); return; }
     const groqKey = localStorage.getItem('groq_api_key');
@@ -1493,6 +1499,22 @@ function updateSegmentTranslation(id, translation) {
         el.classList.add('translation-failed');
         el.classList.remove('has-translation');
     }
+}
+
+function showSystemAudioIndicator() {
+    removeSystemAudioIndicator();
+    const container = document.getElementById('liveTranscript');
+    if (!container) return;
+    const p = document.createElement('p');
+    p.id = 'systemAudioIndicator';
+    p.className = 'system-audio-indicator';
+    p.innerHTML = `<span class="interim-span">🎙 ${t('transcribingMeetingAudio')}</span>`;
+    container.appendChild(p);
+    container.scrollTop = container.scrollHeight;
+}
+
+function removeSystemAudioIndicator() {
+    document.getElementById('systemAudioIndicator')?.remove();
 }
 
 function clearLiveTranscript() {

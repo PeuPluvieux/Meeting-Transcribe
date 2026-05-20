@@ -589,6 +589,11 @@ body {
 .bookmark-ts { font-family: var(--font-mono, monospace); font-weight: 600; }
 .bookmark-label { color: var(--text-secondary); font-style: italic; }
 
+.system-audio-indicator {
+    margin: 4px 0;
+    font-size: 0.875rem;
+}
+
 .para-text {
     margin: 0;
     line-height: 1.75;
