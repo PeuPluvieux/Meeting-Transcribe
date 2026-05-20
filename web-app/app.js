@@ -2886,6 +2886,19 @@ function resetClaudeProjectUrl() {
 
 // ==================== MITAC GPT EXPORT ====================
 
+function buildMiTACTranscriptTxt() {
+    const title = document.getElementById('meetingTitle')?.value?.trim() || 'Untitled Meeting';
+    const date = new Date().toISOString().slice(0, 10);
+    let txt = `${title}\nDate: ${date}\n\n`;
+    meetingData.transcript.forEach(seg => {
+        const text = seg.corrected || seg.original;
+        txt += `[${seg.timestamp}] ${text}\n\n`;
+    });
+    if (meetingData.summary) txt += `\nSUMMARY\n${meetingData.summary}\n`;
+    if (meetingData.actionItems?.length) txt += `\nACTION ITEMS\n${meetingData.actionItems.map(a => `- ${a}`).join('\n')}\n`;
+    return txt;
+}
+
 function saveToMiTACGPT() {
     let url = localStorage.getItem('mitac_gpt_url');
     if (!url) {
@@ -2900,8 +2913,8 @@ function saveToMiTACGPT() {
     }
     const title = (document.getElementById('meetingTitle')?.value?.trim() || 'Meeting').replace(/[\\/:*?"<>|]/g, '_');
     const date = new Date().toISOString().slice(0, 10);
-    const filename = `${title}_${date}.md`;
-    downloadBlob(buildProjectTranscriptMd(), filename, 'text/markdown');
+    const filename = `${title}_${date}.txt`;
+    downloadBlob(buildMiTACTranscriptTxt(), filename, 'text/plain');
     window.open(url, '_blank');
     showToast('Transcript saved! Upload the file to MiTAC GPT.', 'success');
 }
