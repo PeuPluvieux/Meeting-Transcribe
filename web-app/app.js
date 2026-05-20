@@ -1497,7 +1497,7 @@ function updateSegmentTranslation(id, translation) {
 
 function clearLiveTranscript() {
     const container = document.getElementById('liveTranscript');
-    if (container) container.innerHTML = '<p class="placeholder">Transcript will appear here as you speak…</p>';
+    if (container) container.innerHTML = `<p class="placeholder">${t('transcriptPlaceholder')}</p>`;
     _currentParaGroup = null;
     _currentParaText = null;
     _currentParaTransEl = null;
@@ -1578,11 +1578,15 @@ async function startRecording() {
         currentSegmentId = 0; currentMeetingId = null;
         _lastAddedText = ''; _lastAddedAt = 0;
     }
+    // Reset display mode to both so translation is always visible when recording starts
+    setTranscriptDisplayMode('both');
+    const _modeSelect = document.getElementById('transcriptDisplayMode');
+    if (_modeSelect) _modeSelect.value = 'both';
     // Clear DOM and ALL paragraph state BEFORE starting recognition to avoid stale-ref bug
     interimElement = null;
     clearLiveTranscript();
     const _ltEl = document.getElementById('liveTranscript');
-    if (_ltEl) _ltEl.innerHTML = '<p class="placeholder">Speak now — transcript will appear here…</p>';
+    if (_ltEl) _ltEl.innerHTML = `<p class="placeholder">${t('transcriptPlaceholder')}</p>`;
     recordingStartTime = Date.now(); pausedDuration = 0; pauseStartTime = null;
     setAppState('recording');
     startTimer();

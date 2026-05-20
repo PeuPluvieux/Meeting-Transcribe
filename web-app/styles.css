@@ -565,9 +565,9 @@ body {
 
 /* ── Notion-style live view: hide timestamps, show continuous flowing text ── */
 #liveTranscript .para-time { display: none; }
-#liveTranscript .para-header { margin-bottom: 2px; }
+#liveTranscript .para-header { display: none; }
 #liveTranscript .para-group { margin-bottom: 0; }
-#liveTranscript .para-group + .para-group { margin-top: 0.75rem; }
+#liveTranscript .para-group + .para-group { margin-top: 0.5em; }
 
 /* ── Bookmark markers ── */
 .bookmark-marker {
@@ -599,6 +599,11 @@ body {
 .final-span {
     color: inherit;
     transition: color 0.5s ease;
+    animation: segFadeIn 0.2s ease;
+}
+@keyframes segFadeIn {
+    from { opacity: 0.5; }
+    to   { opacity: 1; }
 }
 
 .seg-pending {
