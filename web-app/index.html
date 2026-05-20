@@ -420,9 +420,9 @@
             </div>
             <div class="tab-content" id="transcriptTab" style="display:block;">
                 <div class="content-header">
-                    <h3>Full Transcript</h3>
+                    <h3 id="transcriptTabHeader">Full Transcript</h3>
                     <div class="content-actions">
-                        <span class="edit-hint">Double-click to edit</span>
+                        <span class="edit-hint" id="editHintText">Double-click to edit</span>
                         <button class="btn btn-small" onclick="copyToClipboard('transcript')">📋 Copy</button>
                         <button class="btn btn-small" onclick="downloadFile('transcript')">⬇️ Download</button>
                         <button class="btn btn-small btn-secondary" onclick="exportBilingualTranscript()" title="Export bilingual Markdown table">📄 Bilingual</button>
@@ -436,7 +436,7 @@
             </div>
             <div class="tab-content" id="summaryTab" style="display:none;">
                 <div class="content-header">
-                    <h3>Meeting Summary</h3>
+                    <h3 id="summaryTabHeader">Meeting Summary</h3>
                     <div class="content-actions">
                         <button class="btn btn-small" onclick="copyToClipboard('summary')">📋 Copy</button>
                         <button class="btn btn-small" onclick="downloadFile('summary')">⬇️ Download</button>
@@ -446,7 +446,7 @@
             </div>
             <div class="tab-content" id="actionsTab" style="display:none;">
                 <div class="content-header">
-                    <h3>Action Items</h3>
+                    <h3 id="actionsTabHeader">Action Items</h3>
                     <div class="content-actions">
                         <button class="btn btn-small" onclick="copyToClipboard('actions')">📋 Copy</button>
                         <button class="btn btn-small" onclick="downloadFile('actions')">⬇️ Download</button>
@@ -456,11 +456,11 @@
             </div>
 
             <div class="download-all">
-                <button class="btn btn-primary" onclick="saveCurrentMeeting()">💾 Save Meeting</button>
+                <button class="btn btn-primary" id="btnSaveMeeting" onclick="saveCurrentMeeting()">💾 Save Meeting</button>
                 <button class="btn btn-secondary" id="btnExportMarkdown" onclick="exportMeetingMarkdown()">📤 Export Markdown</button>
                 <button class="btn btn-secondary" id="btnGenerateEmail" onclick="generateFollowUpEmail()">✉️ Follow-Up Email</button>
-                <button class="btn btn-secondary" onclick="downloadAll()">⬇️ Download All</button>
-                <button class="btn btn-secondary" onclick="startNewMeeting()">🔄 New Meeting</button>
+                <button class="btn btn-secondary" id="btnDownloadAll" onclick="downloadAll()">⬇️ Download All</button>
+                <button class="btn btn-secondary" id="btnNewMeeting" onclick="startNewMeeting()">🔄 New Meeting</button>
             </div>
         </div>
 

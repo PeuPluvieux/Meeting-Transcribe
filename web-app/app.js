@@ -76,6 +76,10 @@ const UI_STRINGS = {
         bookmarkBtn: '📌 Bookmark',
         addMeetingAudio: '🖥️ Add Meeting Audio',
         transcriptPlaceholder: 'Transcript will appear here as you speak…',
+        transcriptTabHeader: 'Full Transcript', editHint: 'Double-click to edit',
+        summaryTabHeader: 'Meeting Summary', actionsTabHeader: 'Action Items',
+        btnCopy: '📋 Copy', btnDownload: '⬇️ Download', btnBilingual: '📄 Bilingual',
+        btnSaveMeeting: '💾 Save Meeting', btnDownloadAll: '⬇️ Download All', btnNewMeeting: '🔄 New Meeting',
     },
     'zh-TW': {
         headerTitle: 'AI 會議記錄',
@@ -94,6 +98,10 @@ const UI_STRINGS = {
         bookmarkBtn: '📌 書籤',
         addMeetingAudio: '🖥️ 加入會議音訊',
         transcriptPlaceholder: '開始說話後，逐字稿將顯示於此…',
+        transcriptTabHeader: '完整逐字稿', editHint: '雙擊可編輯',
+        summaryTabHeader: '會議摘要', actionsTabHeader: '行動項目',
+        btnCopy: '📋 複製', btnDownload: '⬇️ 下載', btnBilingual: '📄 雙語',
+        btnSaveMeeting: '💾 儲存會議', btnDownloadAll: '⬇️ 下載全部', btnNewMeeting: '🔄 新會議',
     }
 };
 
@@ -120,6 +128,17 @@ function applyUiLanguage(lang) {
     set('clearTranscriptBtn', s.clearTranscriptBtn);
     set('bookmarkBtn', s.bookmarkBtn);
     set('addMeetingAudioBtnMain', s.addMeetingAudio);
+    set('transcriptTabHeader', s.transcriptTabHeader);
+    set('editHintText', s.editHint);
+    set('summaryTabHeader', s.summaryTabHeader);
+    set('actionsTabHeader', s.actionsTabHeader);
+    set('btnSaveMeeting', s.btnSaveMeeting);
+    set('btnDownloadAll', s.btnDownloadAll);
+    set('btnNewMeeting', s.btnNewMeeting);
+    // Copy/Download buttons — shared across all 3 tabs
+    document.querySelectorAll('.btn-small[onclick*="copyToClipboard"]').forEach(el => el.textContent = s.btnCopy);
+    document.querySelectorAll('.btn-small[onclick*="downloadFile"]').forEach(el => el.textContent = s.btnDownload);
+    document.querySelectorAll('.btn-small[onclick*="exportBilingualTranscript"]').forEach(el => el.textContent = s.btnBilingual);
     // Transcript display mode dropdown options
     const tdm = document.getElementById('transcriptDisplayMode');
     if (tdm && tdm.options.length >= 3) {
