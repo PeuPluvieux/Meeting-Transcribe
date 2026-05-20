@@ -70,6 +70,12 @@ const UI_STRINGS = {
         statusIdle: 'Ready to record', statusDone: 'Completed', statusRecording: 'Recording & Transcribing…', statusPaused: 'Paused', statusProcessing: 'Processing…',
         pipReady: 'Ready', pipRecording: 'Recording', pipPaused: 'Paused', pipProcessing: 'Processing…', pipStopping: 'Stopping…', pipDone: 'Done',
         placeholderMeetingTitle: 'Untitled Meeting',
+        liveTranscriptHeader: '📝 Live Transcript',
+        displayModeBoth: 'Original + Translation', displayModeTransOnly: 'Translation Only', displayModeOrigOnly: 'Original Only',
+        clearTranscriptBtn: 'Clear',
+        bookmarkBtn: '📌 Bookmark',
+        addMeetingAudio: '🖥️ Add Meeting Audio',
+        transcriptPlaceholder: 'Transcript will appear here as you speak…',
     },
     'zh-TW': {
         headerTitle: 'AI 會議記錄',
@@ -82,6 +88,12 @@ const UI_STRINGS = {
         statusIdle: '準備錄音', statusDone: '已完成', statusRecording: '錄音與轉錄中…', statusPaused: '已暫停', statusProcessing: '處理中…',
         pipReady: '就緒', pipRecording: '錄音中', pipPaused: '已暫停', pipProcessing: '處理中…', pipStopping: '停止中…', pipDone: '完成',
         placeholderMeetingTitle: '未命名會議',
+        liveTranscriptHeader: '📝 即時逐字稿',
+        displayModeBoth: '原文 + 翻譯', displayModeTransOnly: '僅翻譯', displayModeOrigOnly: '僅原文',
+        clearTranscriptBtn: '清除',
+        bookmarkBtn: '📌 書籤',
+        addMeetingAudio: '🖥️ 加入會議音訊',
+        transcriptPlaceholder: '開始說話後，逐字稿將顯示於此…',
     }
 };
 
@@ -104,8 +116,23 @@ function applyUiLanguage(lang) {
     set('btnExportMarkdown', s.btnExportMarkdown);
     set('btnGenerateEmail', s.btnGenerateEmail);
     set('stopBtnText', s.stopBtnText);
+    set('liveTranscriptHeader', s.liveTranscriptHeader);
+    set('clearTranscriptBtn', s.clearTranscriptBtn);
+    set('bookmarkBtn', s.bookmarkBtn);
+    set('addMeetingAudioBtnMain', s.addMeetingAudio);
+    // Transcript display mode dropdown options
+    const tdm = document.getElementById('transcriptDisplayMode');
+    if (tdm && tdm.options.length >= 3) {
+        tdm.options[0].text = s.displayModeBoth;
+        tdm.options[1].text = s.displayModeTransOnly;
+        tdm.options[2].text = s.displayModeOrigOnly;
+    }
+    // Live transcript placeholder
+    const ltp = document.querySelector('#liveTranscript .placeholder');
+    if (ltp) ltp.textContent = s.transcriptPlaceholder;
+    // Meeting title placeholder (always update; value is user data)
     const titleInput = document.getElementById('meetingTitle');
-    if (titleInput && !titleInput.value) titleInput.placeholder = s.placeholderMeetingTitle;
+    if (titleInput) titleInput.placeholder = s.placeholderMeetingTitle;
     const langBtn = document.getElementById('langToggleBtn');
     if (langBtn) langBtn.textContent = lang === 'zh-TW' ? '繁中' : 'EN';
     // Sync recording button text to current state
