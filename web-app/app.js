@@ -161,6 +161,8 @@ const UI_STRINGS = {
         groqKeyRejected: 'Groq key rejected — check it in Settings.',
         chunksStillFailing: '{n} chunks still failing.',
         chunksRecovered: 'Recovered all audio chunks.',
+        chunksLostOnStop: '{n} audio chunks could not be transcribed and were left out.',
+        finishingAudio: 'Finishing last meeting audio…',
         bookmarkBtn: '📌 Bookmark',
         addMeetingAudio: '🖥️ Add Meeting Audio',
         transcriptPlaceholder: 'Transcript will appear here as you speak…',
@@ -204,6 +206,8 @@ const UI_STRINGS = {
         groqKeyRejected: 'Groq 金鑰無效 — 請到設定檢查。',
         chunksStillFailing: '仍有 {n} 段音訊失敗。',
         chunksRecovered: '已復原所有音訊段落。',
+        chunksLostOnStop: '有 {n} 段音訊無法轉錄，已略過。',
+        finishingAudio: '正在完成最後的會議音訊…',
         bookmarkBtn: '📌 書籤',
         addMeetingAudio: '🖥️ 加入會議音訊',
         transcriptPlaceholder: '開始說話後，逐字稿將顯示於此…',
@@ -458,7 +462,8 @@ function initSpeechRecognition() {
     // In bilingual mode use more alternatives so the recognizer has better candidates for mixed speech
     recognition.maxAlternatives = sourceLang.includes('+') ? 3 : 1;
     recognition.onstart = () => { speechActive = true; _lastSpeechResultAt = Date.now(); updateMicStatus('listening'); };
-    recognition.onresult = (event) => { if (appState === 'recording') handleSpeechResult(event); };
+    // Finals can arrive just after pause/stop — accept them so the last sentence isn't lost.
+    recognition.onresult = (event) => { if (['recording', 'paused', 'stopping'].includes(appState)) handleSpeechResult(event); };
     recognition.onerror = (event) => {
         if (event.error === 'no-speech') return;
         if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
@@ -684,16 +689,19 @@ async function startSystemAudioCapture() {
         systemAudioChunks = [];
         systemAudioRecorder.ondataavailable = (e) => { if (e.data.size > 0) systemAudioChunks.push(e.data); };
         systemAudioRecorder.onstop = () => {
-            if (!systemAudioRecorderActive) { systemAudioChunks = []; systemAudioChunkStartTime = null; return; }
-            const elapsed = systemAudioChunkStartTime ? Date.now() - systemAudioChunkStartTime : 0;
-            if (systemAudioChunks.length && elapsed >= 2000) {
-                const blob = new Blob(systemAudioChunks, { type: mimeType });
-                systemAudioChunks = [];
-                systemAudioChunkStartTime = null;
-                transcribeSystemAudioChunk(blob, systemAudioChunkStartElapsed);
-            } else {
-                systemAudioChunks = [];
-                systemAudioChunkStartTime = null;
+            const isFinal = !systemAudioActive; // capture was stopped (not a 12s rotation)
+            if (systemAudioRecorderActive) {
+                const elapsed = systemAudioChunkStartTime ? Date.now() - systemAudioChunkStartTime : 0;
+                if (systemAudioChunks.length && elapsed >= 2000) {
+                    const blob = new Blob(systemAudioChunks, { type: mimeType });
+                    transcribeSystemAudioChunk(blob, systemAudioChunkStartElapsed);
+                }
+            }
+            systemAudioChunks = [];
+            systemAudioChunkStartTime = null;
+            if (isFinal) {
+                systemAudioRecorderActive = false;
+                audioStream.getTracks().forEach(t => t.stop()); // ends Chrome's "sharing" indicator
             }
         };
         systemAudioRecorderActive = true;
@@ -732,17 +740,32 @@ async function startSystemAudioCapture() {
     }
 }
 
-function stopSystemAudioCapture() {
-    systemAudioRecorderActive = false;
+// flush=true: transcribe the in-progress chunk (used by Stop). flush=false: discard it.
+function stopSystemAudioCapture({ flush = false } = {}) {
     clearInterval(systemAudioChunkTimer); systemAudioChunkTimer = null;
     removeSystemAudioIndicator();
-    if (systemAudioRecorder) {
-        try { if (systemAudioRecorder.state !== 'inactive') systemAudioRecorder.stop(); } catch (e) {}
-        systemAudioRecorder = null;
-    }
+    const rec = systemAudioRecorder;
+    systemAudioRecorder = null;
     systemAudioActive = false;
-    systemAudioChunks = [];
     updateSystemAudioStatus(false);
+    if (!rec || rec.state === 'inactive') {
+        systemAudioRecorderActive = false;
+        rec?.stream.getTracks().forEach(t => t.stop());
+        systemAudioChunks = [];
+        return Promise.resolve();
+    }
+    if (!flush) systemAudioRecorderActive = false;
+    const stopped = new Promise(resolve => {
+        rec.addEventListener('stop', () => resolve(), { once: true }); // fires after onstop → job already tracked
+        setTimeout(resolve, 3000);
+    });
+    try { rec.stop(); } catch (e) { systemAudioRecorderActive = false; }
+    return stopped;
+}
+
+async function settleMeetingJobs(timeoutMs) {
+    if (!pendingMeetingJobs.size) return;
+    await Promise.race([Promise.allSettled([...pendingMeetingJobs]), sleep(timeoutMs)]);
 }
 
 function updateSystemAudioStatus(active) {
@@ -754,7 +777,7 @@ function updateSystemAudioStatus(active) {
     if (badge) badge.style.display = active ? 'inline-flex' : 'none';
 }
 
-async function transcribeLocalWhisper(blob) {
+async function transcribeLocalWhisper(blob, startSeconds) {
     if (blob.size < 8000) return;
     showToast('Transcribing with local Whisper…', 'info');
     try {
@@ -779,7 +802,7 @@ async function transcribeLocalWhisper(blob) {
         if (!sourceLang.includes('+')) opts.language = sourceLang.split('-')[0];
         const arrayBuffer = await blob.arrayBuffer();
         const result = await localWhisperPipeline(arrayBuffer, opts);
-        if (result.text?.trim()) addTranscriptSegment(result.text.trim(), 'meeting');
+        if (result.text?.trim()) addTranscriptSegment(result.text.trim(), 'meeting', { startSeconds });
     } catch (e) {
         showToast('Local Whisper failed: ' + e.message, 'error');
         console.error('[Local Whisper]', e);
@@ -845,12 +868,14 @@ function updateFailedChunksUI() {
     const btn = document.getElementById('failedChunksBtn');
     if (!btn) return;
     const n = failedMeetingChunks.length;
-    btn.style.display = n ? '' : 'none';
+    const live = ['recording', 'paused', 'stopping'].includes(appState);
+    btn.style.display = (n && live) ? '' : 'none';
     btn.textContent = t('failedChunks').replace('{n}', n);
 }
 
 async function retryFailedChunks({ quiet = false } = {}) {
     const groqKey = appStorage.getItem('groq_api_key');
+    if (!['recording', 'paused', 'stopping'].includes(appState)) return;
     if (!groqKey || !failedMeetingChunks.length) return;
     const batch = failedMeetingChunks;
     failedMeetingChunks = [];
@@ -871,7 +896,7 @@ async function retryFailedChunks({ quiet = false } = {}) {
 function transcribeSystemAudioChunk(blob, startSeconds) {
     removeSystemAudioIndicator();
     const meetingProvider = appStorage.getItem('meeting_transcription_provider') || 'groq';
-    if (meetingProvider === 'local') return trackMeetingJob(transcribeLocalWhisper(blob));
+    if (meetingProvider === 'local') return trackMeetingJob(transcribeLocalWhisper(blob, startSeconds));
     const groqKey = appStorage.getItem('groq_api_key');
     if (!groqKey) return Promise.resolve();
     if (blob.size < 8000) {
@@ -1541,7 +1566,8 @@ const _normalizeForDedup = s => s.trim().replace(/[.!?。？！…,，、]+$/, '
 
 function addTranscriptSegment(text, source = 'mic', { startSeconds } = {}) {
     if (!text.trim()) return;
-    if (appState === 'stopping' || appState === 'processing') return;
+    // 'stopping' must stay open: the final mic sentence and last meeting-audio chunk land here.
+    if (appState === 'processing' || appState === 'idle' || appState === 'done') return;
     // Deduplication: skip if same text (modulo trailing punctuation) was just added within 3s.
     // Catches: flush fires then final arrives with slight punctuation difference.
     const now = Date.now();
@@ -1910,6 +1936,7 @@ async function _startRecordingImpl() {
     const _ltEl = document.getElementById('liveTranscript');
     if (_ltEl) _ltEl.innerHTML = `<p class="placeholder">${t('transcriptPlaceholder')}</p>`;
     recordingStartTime = Date.now(); pausedDuration = 0; pauseStartTime = null;
+    failedMeetingChunks = []; updateFailedChunksUI();
     currentMeetingId = generateUUID();   // draft and saved meeting share one id -> recovery is idempotent
     _draftStartedAt = Date.now();
     clearDraft();
@@ -1963,14 +1990,24 @@ async function stopRecording() {
     if (appState !== 'recording' && appState !== 'paused') return;
     if (appState === 'paused' && pauseStartTime) { pausedDuration += Date.now() - pauseStartTime; pauseStartTime = null; }
     setAppState('stopping');
+    stopTimer();                                     // duration = moment Stop was pressed, not after flushing
     if (getMicProvider() === 'gladia') stopGladiaMic(); else stopSpeechRecognition();
-    stopSystemAudioCapture();
-    await new Promise(r => setTimeout(r, 500));
+    showProcessingOverlay(true, t('finishingAudio'));
+    await stopSystemAudioCapture({ flush: true });   // D3: last chunk is transcribed, not dropped
+    await settleMeetingJobs(30000);                  // wait for in-flight chunks (bounded)
+    if (failedMeetingChunks.length) await retryFailedChunks({ quiet: true });
+    if (failedMeetingChunks.length) {
+        showToast(t('chunksLostOnStop').replace('{n}', failedMeetingChunks.length), 'warning');
+        failedMeetingChunks = [];
+    }
+    await sleep(500);                                // last Web Speech final result
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'none';
-    stopTimer();
     resetAudioQualityMonitor();
+    stopDraftHeartbeat();
+    writeDraft();                                    // final draft before processing
     setAppState('processing');
+    updateFailedChunksUI();
     await processRecording();
     setAppState('done');
 }
