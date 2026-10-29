@@ -1,5 +1,8 @@
 name: Deploy to GitHub Pages
 
+# One Pages site: main/web-app at /, beta/web-app at /beta/.
+# Always runs on main (the github-pages environment only allows the default branch);
+# beta pushes reach here via beta-trigger.yml -> workflow_dispatch.
 on:
   push:
     branches: [main]
@@ -22,9 +25,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main
+      - name: Check for beta branch
+        id: beta
+        working-directory: main
+        run: |
+          if git ls-remote --exit-code --heads origin beta >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.beta.outputs.exists == 'true'
+        with:
+          ref: beta
+          path: beta
+      - name: Assemble site
+        run: |
+          mkdir site
+          cp -r main/web-app/. site/
+          if [ -d beta/web-app ]; then
+            mkdir site/beta
+            cp -r beta/web-app/. site/beta/
+          fi
+          rm -f site/GroqAPI.txt site/beta/GroqAPI.txt
+          ls -R site | head -50
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: web-app
+          path: site
       - id: deployment
         uses: actions/deploy-pages@v4

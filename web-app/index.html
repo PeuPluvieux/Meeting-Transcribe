@@ -24,6 +24,12 @@
     <button onclick="document.getElementById('setupBanner').style.display='none'" style="color:#fff;opacity:0.8;">✕</button>
 </div>
 
+<!-- Beta channel banner (shown only on /beta/) -->
+<div id="betaBanner" class="browser-warning" style="display:none;">
+    <span id="betaBannerText">Beta Build — separate data from the main app.</span>
+    <button class="btn btn-small btn-secondary" id="copySettingsBtn" onclick="copySettingsFromMain()">Copy My Settings From Main App</button>
+</div>
+
 <!-- Audio quality warning -->
 <div id="audioQualityWarning" class="audio-quality-warning" style="display:none;">
     <span>⚠️ <strong>Poor audio quality detected</strong> — speech is being lost. Check your microphone, reduce background noise, or try moving closer to the mic.</span>

@@ -96,6 +96,9 @@ const UI_STRINGS = {
         summaryTabHeader: 'Meeting Summary', actionsTabHeader: 'Action Items',
         btnCopy: '📋 Copy', btnDownload: '⬇️ Download', btnBilingual: '📄 Bilingual',
         btnSaveMeeting: '💾 Save Meeting', btnDownloadAll: '⬇️ Download All', btnNewMeeting: '🔄 New Meeting',
+        betaBanner: 'Beta Build — separate data from the main app. Meetings: export JSON in the main app, import here.',
+        copySettings: 'Copy My Settings From Main App',
+        settingsCopied: 'Copied {n} settings from the main app. Reloading…',
     },
     'zh-TW': {
         headerTitle: 'AI 會議記錄',
@@ -119,6 +122,9 @@ const UI_STRINGS = {
         summaryTabHeader: '會議摘要', actionsTabHeader: '行動項目',
         btnCopy: '📋 複製', btnDownload: '⬇️ 下載', btnBilingual: '📄 雙語',
         btnSaveMeeting: '💾 儲存會議', btnDownloadAll: '⬇️ 下載全部', btnNewMeeting: '🔄 新會議',
+        betaBanner: '測試版 — 資料與正式版分開。會議紀錄：在正式版匯出 JSON，再於此匯入。',
+        copySettings: '從正式版複製設定',
+        settingsCopied: '已從正式版複製 {n} 項設定，重新載入中…',
     }
 };
 
@@ -189,6 +195,7 @@ function applyUiLanguage(lang) {
         else if (state === 'paused') statusText.textContent = s.statusPaused;
         else if (state === 'processing') statusText.textContent = s.statusProcessing;
     }
+    if (IS_BETA) showBetaBanner();
 }
 
 function toggleUiLanguage() {
@@ -3914,11 +3921,30 @@ async function importMeetingsFromFile(event) {
     event.target.value = '';
 }
 
+// ==================== BETA CHANNEL ====================
+function showBetaBanner() {
+    if (!IS_BETA) return;
+    const banner = document.getElementById('betaBanner');
+    if (!banner) return;
+    document.getElementById('betaBannerText').textContent = t('betaBanner');
+    document.getElementById('copySettingsBtn').textContent = t('copySettings');
+    banner.style.display = 'flex';
+}
+
+function copySettingsFromMain() {
+    if (!IS_BETA) return;
+    const n = MTLib.copyMainSettings(localStorage, STORAGE_PREFIX, APP_SETTING_KEYS);
+    showToast(t('settingsCopied').replace('{n}', n), 'success');
+    setTimeout(() => location.reload(), 1200);
+}
+
 // ==================== INIT ====================
 document.addEventListener('DOMContentLoaded', async () => {
     try { await initDB(); } catch (e) { console.error('DB init failed:', e); }
     loadTheme();
     applyUiLanguage(appStorage.getItem('ui_lang') || 'en');
+    showBetaBanner();
+    console.info(`[Meeting Notes AI] v${APP_VERSION}${IS_BETA ? ' (beta)' : ''}`);
     loadMeetingTitle();
     loadSettings();
     initSpeakers();
