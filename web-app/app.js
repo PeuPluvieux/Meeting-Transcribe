@@ -722,7 +722,7 @@ async function startSystemAudioCapture() {
                 }, 200);
             }
         }, SYSTEM_AUDIO_CHUNK_MS);
-        audioTracks[0].onended = () => { stopSystemAudioCapture(); showToast('Meeting audio sharing ended.', 'info'); };
+        audioTracks[0].onended = () => { stopSystemAudioCapture({ flush: ['recording', 'paused'].includes(appState) }); showToast('Meeting audio sharing ended.', 'info'); };
         systemAudioActive = true;
         updateSystemAudioStatus(true);
         showToast('Meeting audio capture started!', 'success');
@@ -748,6 +748,14 @@ function stopSystemAudioCapture({ flush = false } = {}) {
     systemAudioRecorder = null;
     systemAudioActive = false;
     updateSystemAudioStatus(false);
+    if (rec && rec.state === 'inactive' && flush && systemAudioChunks.length) {
+        // A rotation's rec.stop() already ran but its async onstop hasn't: leave the chunk for that
+        // handler (it sees systemAudioActive=false → isFinal → transcribes it and stops the tracks).
+        return new Promise(resolve => {
+            rec.addEventListener('stop', () => resolve(), { once: true });
+            setTimeout(resolve, 3000);
+        });
+    }
     if (!rec || rec.state === 'inactive') {
         systemAudioRecorderActive = false;
         rec?.stream.getTracks().forEach(t => t.stop());
@@ -759,7 +767,7 @@ function stopSystemAudioCapture({ flush = false } = {}) {
         rec.addEventListener('stop', () => resolve(), { once: true }); // fires after onstop → job already tracked
         setTimeout(resolve, 3000);
     });
-    try { rec.stop(); } catch (e) { systemAudioRecorderActive = false; }
+    try { rec.stop(); } catch (e) { systemAudioRecorderActive = false; rec.stream.getTracks().forEach(t => t.stop()); }
     return stopped;
 }
 
@@ -873,7 +881,7 @@ function updateFailedChunksUI() {
     btn.textContent = t('failedChunks').replace('{n}', n);
 }
 
-async function retryFailedChunks({ quiet = false } = {}) {
+async function retryFailedChunks({ quiet = false, deadlineMs = Infinity, undone = new Set() } = {}) {
     const groqKey = appStorage.getItem('groq_api_key');
     if (!['recording', 'paused', 'stopping'].includes(appState)) return;
     if (!groqKey || !failedMeetingChunks.length) return;
@@ -881,13 +889,18 @@ async function retryFailedChunks({ quiet = false } = {}) {
     failedMeetingChunks = [];
     updateFailedChunksUI();
     const sourceLang = appStorage.getItem('source_lang') || 'en-US';
+    batch.forEach(c => undone.add(c));
+    const deadline = Date.now() + deadlineMs;
     for (const chunk of batch) {
+        if (!undone.has(chunk)) continue;  // abandoned by Stop's timeout
+        if (Date.now() >= deadline) { failedMeetingChunks.push(chunk); undone.delete(chunk); continue; }
         try {
             const text = await groqWhisper(chunk.blob, groqKey, sourceLang);
             if (text) addTranscriptSegment(text, 'meeting', { startSeconds: chunk.startSeconds });
         } catch (e) {
-            failedMeetingChunks.push(chunk);
+            if (undone.has(chunk)) failedMeetingChunks.push(chunk);
         }
+        undone.delete(chunk);
     }
     updateFailedChunksUI();
     if (!quiet) showToast(failedMeetingChunks.length ? t('chunksStillFailing').replace('{n}', failedMeetingChunks.length) : t('chunksRecovered'), failedMeetingChunks.length ? 'warning' : 'success');
@@ -915,7 +928,7 @@ function transcribeSystemAudioChunk(blob, startSeconds) {
 }
 
 async function handleAddMeetingAudio() {
-    if (systemAudioActive) { stopSystemAudioCapture(); return; }
+    if (systemAudioActive) { stopSystemAudioCapture({ flush: ['recording', 'paused'].includes(appState) }); return; }
     if (appState !== 'recording') { showToast('Start recording first, then add meeting audio.', 'info'); return; }
     await startSystemAudioCapture();
 }
@@ -1995,11 +2008,16 @@ async function stopRecording() {
     showProcessingOverlay(true, t('finishingAudio'));
     await stopSystemAudioCapture({ flush: true });   // D3: last chunk is transcribed, not dropped
     await settleMeetingJobs(30000);                  // wait for in-flight chunks (bounded)
-    if (failedMeetingChunks.length) await retryFailedChunks({ quiet: true });
+    let lost = pendingMeetingJobs.size;              // still running after the wait → will be left out
     if (failedMeetingChunks.length) {
-        showToast(t('chunksLostOnStop').replace('{n}', failedMeetingChunks.length), 'warning');
-        failedMeetingChunks = [];
+        const undone = new Set();                    // chunks the retry hasn't finished (read after a timeout)
+        await Promise.race([retryFailedChunks({ quiet: true, deadlineMs: 30000, undone }), sleep(30000)]);
+        lost += undone.size;                         // in-flight or unattempted when the race timed out
+        undone.clear();                              // the abandoned retry must not re-queue them later
     }
+    lost += failedMeetingChunks.length;
+    if (lost) showToast(t('chunksLostOnStop').replace('{n}', lost), 'warning');
+    failedMeetingChunks = [];
     await sleep(500);                                // last Web Speech final result
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'none';
