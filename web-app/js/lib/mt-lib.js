@@ -54,7 +54,24 @@
         return Math.min(Math.max(ms, 0), capMs);
     }
 
-    const api = { namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs };
+    // ==================== LLM OUTPUT ====================
+    function parseJsonLoose(raw) {
+        const text = String(raw ?? '');
+        try { return JSON.parse(text); } catch (_) { /* fall through */ }
+        const m = text.match(/\{[\s\S]*\}/);
+        if (m) {
+            try { return JSON.parse(m[0]); } catch (e) { throw new Error('Invalid JSON from model: ' + e.message); }
+        }
+        throw new Error('Invalid JSON from model: no object found');
+    }
+
+    function groupForMerge(items, size) {
+        const groups = [];
+        for (let i = 0; i < items.length; i += size) groups.push(items.slice(i, i + size));
+        return groups;
+    }
+
+    const api = { namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, parseJsonLoose, groupForMerge };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTLib = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

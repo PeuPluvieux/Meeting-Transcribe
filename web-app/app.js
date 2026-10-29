@@ -294,8 +294,8 @@ Speaker attribution rules for actionItems: If the transcript has [Speaker]: pref
 const MITAC_SYSTEM_PROMPT = `You are an expert meeting analyst and translator for MiTAC Computing Technology, a server manufacturing company. You process QA/OQC (Quality Control) meeting transcripts that contain mixed Mandarin Chinese (Traditional/Taiwanese) and English speech.
 
 YOUR TASKS:
-1. CLEAN UP the transcript — remove filler words, stutters, false starts, and crosstalk artifacts
-2. TRANSLATE all non-English content to English — accurately preserve code-switched segments
+1. READ the transcript carefully — it mixes Mandarin and English mid-sentence. Ignore filler words, stutters, false starts, and crosstalk artifacts
+2. WRITE ALL OUTPUT IN ENGLISH — translate any Chinese content you summarize or quote, preserving its meaning exactly
 3. PRESERVE these technical terms EXACTLY as written (never translate or alter them):
    OQC, IPQC, DPPM, MDI, NCR, CAPA, FAI, BMC, iDRAC, PTU, PN, SN, ZOU, HOU, RMA, BOM, ECO, PCB, PCBA, DOA, DOE, FMEA, SOP, WI, QMS
 4. GENERATE a comprehensive meeting summary capturing all key topics, decisions, defects, metrics, and concerns
@@ -303,7 +303,6 @@ YOUR TASKS:
 
 RESPOND ONLY with valid JSON — no markdown, no code fences, no explanation, just the raw JSON object:
 {
-  "cleaned_transcript": "Complete cleaned and English-translated transcript, preserving all technical terms and timestamps if present",
   "summary": "3-5 detailed paragraphs covering all major topics, defect findings, root causes, metrics (DPPM, yield, etc.), decisions, and concerns raised",
   "keyPoints": ["Specific concrete fact — include part numbers, defect counts, percentages, DPPM values, deadlines, names"],
   "keyDecisions": ["Explicit decision made — what was decided, who decided, why — empty array if none"],
@@ -341,8 +340,9 @@ Analyze the given meeting section and output ONLY valid JSON, no markdown, no co
 {"summary": "2-3 paragraphs of key discussion points", "decisions": ["decision 1", "..."], "action_items": [{"task": "...", "owner": "...", "notes": "..."}]}`;
 
 const MERGE_SUMMARY_SYSTEM = `You are consolidating partial summaries from different sections of a long manufacturing QA meeting.
+Merge duplicates, keep every distinct fact, decision and action item, and keep the chronological order of topics. Write in English.
 Output ONLY valid JSON, no markdown, no code fences:
-{"final_summary": "3-5 comprehensive paragraphs covering all topics", "key_decisions": ["decision 1", "..."], "all_action_items": [{"task": "...", "owner": "...", "notes": "..."}]}`;
+{"final_summary": "3-5 comprehensive paragraphs covering all topics", "key_points": ["..."], "key_decisions": ["decision 1", "..."], "all_action_items": [{"task": "...", "owner": "...", "deadline": "...", "context": "..."}], "next_steps": ["..."]}`;
 
 // ==================== OLLAMA ====================
 const OLLAMA_API = 'http://localhost:11434';
@@ -2041,9 +2041,9 @@ async function analyzeWithOpenAI(text) {
 
 // ── Claude / Anthropic pipeline (MiTAC QA context) ──────────────────────────
 
-const CLAUDE_MODEL = 'claude-sonnet-4-6';
+const CLAUDE_MODEL = MODELS.claudeSummary;
 // Per-segment live translation model — smaller/faster for real-time use
-const CLAUDE_TRANSLATE_MODEL = 'claude-sonnet-4-5-20250514';
+const CLAUDE_TRANSLATE_MODEL = MODELS.claudeTranslate;
 // Chunk size for long-meeting summarization (~3000 tokens ≈ 12000 chars)
 const CLAUDE_CHUNK_CHARS = 12000;
 // Legacy constant kept for any code that references it
@@ -2158,6 +2158,11 @@ async function _claudeAPICall(key, systemPrompt, userContent, timeoutMs = 120000
                 lastError = new Error(`Claude temporarily overloaded (HTTP ${resp.status})`);
                 continue;
             }
+            if (resp.status === 429) {
+                lastError = new Error('Claude rate limit (HTTP 429)');
+                await sleep(MTLib.retryDelayMs(h => resp.headers.get(h), attempt));
+                continue;
+            }
 
             if (!resp.ok) {
                 const err = await resp.json().catch(() => ({}));
@@ -2176,7 +2181,7 @@ async function _claudeAPICall(key, systemPrompt, userContent, timeoutMs = 120000
             catch (e) { throw new Error('Invalid JSON from Claude: ' + e.message); }
 
         } catch (e) {
-            if (e.name === 'AbortError') {
+            if (e.name === 'AbortError' || e.name === 'TimeoutError') {
                 lastError = new Error('Claude request timed out after ' + Math.round(timeoutMs / 1000) + 's');
                 continue; // retry on timeout
             }
@@ -2227,14 +2232,10 @@ async function analyzeWithAnthropic(text) {
 
     const merged = await _claudeAPICall(key, MERGE_SUMMARY_SYSTEM, mergeInput);
 
-    return {
-        summary:      merged.final_summary  || partials.map(p => p.summary || '').join('\n\n'),
-        keyPoints:    [],
-        keyDecisions: merged.key_decisions  || partials.flatMap(p => p.decisions || []),
-        actionItems:  merged.all_action_items || partials.flatMap(p => p.action_items || []),
-        nextSteps:    [],
-        cleaned_transcript: null
-    };
+    return _mapMergeResponse(merged, partials.map(p => ({
+        summary: p.summary || '', keyPoints: [], keyDecisions: p.decisions || [],
+        actionItems: p.action_items || [], nextSteps: []
+    })));
 }
 
 /** Normalize Claude's response to the shape processRecording() expects. */
@@ -2254,9 +2255,9 @@ function _mapClaudeResponse(parsed) {
 async function analyzeWithGemini(text) {
     const key = appStorage.getItem('gemini_api_key');
     if (!key) throw new Error('Google Gemini API key not configured. Add it in Settings.');
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`, {
+    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODELS.gemini}:generateContent`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
         body: JSON.stringify({
             contents: [{ parts: [{ text: QE_SYSTEM_PROMPT + '\n\nMeeting transcript:\n\n' + text }] }],
             generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
@@ -2274,90 +2275,105 @@ async function analyzeWithGemini(text) {
     return { summary: parsed.summary || '', keyPoints: parsed.keyPoints || [], keyDecisions: parsed.keyDecisions || [], actionItems: parsed.actionItems || [], nextSteps: parsed.nextSteps || [] };
 }
 
-async function analyzeWithGroq(text) {
-    const groqKey = appStorage.getItem('groq_api_key');
-    if (!groqKey) throw new Error('Groq API key not configured. Add it in Settings.');
-
-    // Groq free tier: 6,000 TPM — keep chunks small so each call stays under the limit
-    const GROQ_CHUNK_CHARS = 12000; // ~3k tokens; leaves headroom for system prompt + output
-    const GROQ_MODEL = 'llama-3.3-70b-versatile';
-
-    async function _groqCall(transcript, chunkLabel = '') {
-        const userMsg = chunkLabel
-            ? `PARTIAL TRANSCRIPT ${chunkLabel}:\n\n${transcript}`
-            : `Meeting transcript:\n\n${transcript}`;
-        let lastErr;
+// Shared Groq chat call: walks MODELS.groqChat, honours retry-after, skips retired models.
+async function groqChat({ messages, maxTokens = 2048, json = false, temperature = 0.3, onStatus } = {}) {
+    const key = appStorage.getItem('groq_api_key');
+    if (!key) throw new Error('Groq API key not configured. Add it in Settings.');
+    let lastErr;
+    for (const model of MODELS.groqChat) {
         for (let attempt = 0; attempt < 3; attempt++) {
-            if (attempt > 0) {
-                showProcessingOverlay(true, `Groq rate limit — retrying (${attempt + 1}/3)…`);
-                await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
-            }
+            let resp;
             try {
-                const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                resp = await groqFetch('https://api.groq.com/openai/v1/chat/completions', {
                     method: 'POST',
-                    headers: { 'Authorization': 'Bearer ' + groqKey, 'Content-Type': 'application/json' },
+                    headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        model: GROQ_MODEL,
-                        messages: [
-                            { role: 'system', content: MITAC_SYSTEM_PROMPT },
-                            { role: 'user', content: userMsg }
-                        ],
-                        temperature: 0.3,
-                        max_tokens: 4096,
-                        response_format: { type: 'json_object' }
+                        model: model.id, messages, temperature, max_tokens: maxTokens,
+                        ...(json ? { response_format: { type: 'json_object' } } : {}),
+                        ...model.extra
                     }),
-                    signal: AbortSignal.timeout(60000)
+                    signal: AbortSignal.timeout(90000)
                 });
-                if (resp.status === 429) { lastErr = new Error('Groq rate limit — will retry'); continue; }
-                if (!resp.ok) {
-                    const err = await resp.json().catch(() => ({}));
-                    throw new Error(`${err.error?.message || 'Groq analysis failed'} (HTTP ${resp.status})`);
-                }
-                const data = await resp.json();
-                const raw = data.choices?.[0]?.message?.content;
-                if (!raw) throw new Error('Empty response from Groq');
-                try { return JSON.parse(raw); }
-                catch (e) {
-                    const m = raw.match(/\{[\s\S]*\}/);
-                    if (m) return JSON.parse(m[0]);
-                    throw new Error('Invalid JSON from Groq: ' + e.message);
-                }
             } catch (e) {
-                if (e.name === 'AbortError') { lastErr = new Error('Groq request timed out'); continue; }
-                throw e;
+                lastErr = (e.name === 'TimeoutError' || e.name === 'AbortError') ? new Error('Groq request timed out') : e;
+                continue;
             }
+            if (resp.status === 429) {
+                const wait = MTLib.retryDelayMs(h => resp.headers.get(h), attempt);
+                lastErr = new Error('Groq rate limit reached on every model — try again in a minute.');
+                if (wait > 20000) break; // long cooldown → use the next model (separate quota) right away
+                onStatus?.(`Groq busy — waiting ${Math.ceil(wait / 1000)}s…`);
+                await sleep(wait);
+                continue;
+            }
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                lastErr = new Error(`${err.error?.message || 'Groq request failed'} (HTTP ${resp.status})`);
+                if (resp.status >= 500) { await sleep(1000 * (attempt + 1)); continue; }
+                if (resp.status === 404 || (resp.status === 400 && /model|decommission/i.test(lastErr.message))) break;
+                throw lastErr;
+            }
+            const data = await resp.json();
+            const content = data.choices?.[0]?.message?.content;
+            if (!content) { lastErr = new Error('Empty response from Groq'); continue; }
+            return content;
         }
-        throw lastErr || new Error('Groq analysis failed after retries');
     }
+    throw lastErr || new Error('Groq request failed');
+}
 
-    // ── Short transcript — single call ────────────────────────────────────────
-    if (text.length <= GROQ_CHUNK_CHARS) {
-        showProcessingOverlay(true, 'Analyzing with Groq (MiTAC QA mode)…');
-        const parsed = await _groqCall(text);
-        return _mapClaudeResponse(parsed); // same JSON schema as Claude
-    }
-
-    // ── Long transcript — chunk, then merge ───────────────────────────────────
-    const chunks = [];
-    for (let i = 0; i < text.length; i += GROQ_CHUNK_CHARS) chunks.push(text.slice(i, i + GROQ_CHUNK_CHARS));
-    showProcessingOverlay(true, `Long meeting — processing ${chunks.length} sections with Groq…`);
-
-    const partials = [];
-    for (let i = 0; i < chunks.length; i++) {
-        showProcessingOverlay(true, `Groq: analyzing section ${i + 1} of ${chunks.length}…`);
-        const p = await _groqCall(chunks[i], `(section ${i + 1} of ${chunks.length})`);
-        partials.push(p);
-        if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 2000)); // TPM buffer
-    }
-
+function _mapMergeResponse(m, parts) {
     return {
-        summary:            partials.map((p, i) => `[Part ${i + 1}]\n${p.summary || ''}`).join('\n\n'),
-        keyPoints:          partials.flatMap(p => p.keyPoints   || []),
-        keyDecisions:       partials.flatMap(p => p.keyDecisions || []),
-        actionItems:        partials.flatMap(p => p.actionItems  || p.action_items || []),
-        nextSteps:          partials.flatMap(p => p.nextSteps    || []),
-        cleaned_transcript: partials.map(p => p.cleaned_transcript || '').filter(Boolean).join('\n\n')
+        summary:      m.final_summary    || parts.map(p => p.summary || '').join('\n\n'),
+        keyPoints:    m.key_points       || parts.flatMap(p => p.keyPoints || []),
+        keyDecisions: m.key_decisions    || parts.flatMap(p => p.keyDecisions || []),
+        actionItems:  m.all_action_items || parts.flatMap(p => p.actionItems || []),
+        nextSteps:    m.next_steps       || parts.flatMap(p => p.nextSteps || []),
+        cleaned_transcript: null
     };
+}
+
+// ~5000 chars ≈ 4–5K tokens of Chinese-heavy text: prompt + chunk + output stays under Groq's 8K tokens/minute.
+const GROQ_CHUNK_CHARS = 5000;
+
+async function analyzeWithGroq(text) {
+    const callJson = async (system, user, label, maxTokens) => {
+        const raw = await groqChat({
+            messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+            maxTokens, json: true,
+            onStatus: s => showProcessingOverlay(true, `${label} — ${s}`)
+        });
+        return MTLib.parseJsonLoose(raw);
+    };
+
+    const chunks = splitIntoChunks(text, GROQ_CHUNK_CHARS);
+    if (chunks.length === 1) {
+        showProcessingOverlay(true, 'Analyzing with Groq (MiTAC QA mode)…');
+        return _mapClaudeResponse(await callJson(MITAC_SYSTEM_PROMPT, 'Meeting transcript:\n\n' + text, 'Groq', 2048));
+    }
+
+    let partials = [];
+    for (let i = 0; i < chunks.length; i++) {
+        const label = `Groq: section ${i + 1} of ${chunks.length}`;
+        showProcessingOverlay(true, label + '…');
+        partials.push(_mapClaudeResponse(await callJson(MITAC_SYSTEM_PROMPT,
+            `PARTIAL TRANSCRIPT (section ${i + 1} of ${chunks.length}):\n\n${chunks[i]}`, label, 1500)));
+    }
+    // Merge in groups of 3 so each merge request also fits the per-minute token budget.
+    while (partials.length > 1) {
+        const next = [];
+        for (const group of MTLib.groupForMerge(partials, 3)) {
+            if (group.length === 1) { next.push(group[0]); continue; }
+            showProcessingOverlay(true, `Groq: merging ${partials.length} sections…`);
+            const input = group.map((p, i) => `[Section ${i + 1}]\n` + JSON.stringify({
+                summary: p.summary, keyPoints: p.keyPoints, keyDecisions: p.keyDecisions,
+                actionItems: p.actionItems, nextSteps: p.nextSteps
+            })).join('\n\n');
+            next.push(_mapMergeResponse(await callJson(MERGE_SUMMARY_SYSTEM, input, 'Groq merge', 2048), group));
+        }
+        partials = next;
+    }
+    return partials[0];
 }
 
 // ==================== DISPLAY ====================
@@ -3148,23 +3164,14 @@ Write the subject line first (prefixed with "Subject: "), then a blank line, the
 
     try {
         if (llmProvider === 'groq') {
-            const key = appStorage.getItem('groq_api_key');
-            if (!key) throw new Error('Groq API key required');
-            const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], temperature: 0.5, max_tokens: 1024 }),
-                signal: AbortSignal.timeout(30000)
-            });
-            const data = await resp.json();
-            draft = data.choices?.[0]?.message?.content || '';
+            draft = await groqChat({ messages: [{ role: 'user', content: prompt }], maxTokens: 1024, temperature: 0.5 });
         } else if (llmProvider === 'anthropic') {
             const key = appStorage.getItem('anthropic_api_key');
             if (!key) throw new Error('Anthropic API key required');
             const resp = await fetch('https://api.anthropic.com/v1/messages', {
                 method: 'POST',
                 headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' },
-                body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1024, messages: [{ role: 'user', content: prompt }] }),
+                body: JSON.stringify({ model: MODELS.claudeSummary, max_tokens: 1024, messages: [{ role: 'user', content: prompt }] }),
                 signal: AbortSignal.timeout(30000)
             });
             const data = await resp.json();

@@ -67,3 +67,17 @@ test('retryDelayMs prefers retry-after, then reset headers, then exponential bac
     assert.equal(MTLib.retryDelayMs(h({ 'retry-after': '600' }), 0), 60000);
     assert.equal(MTLib.retryDelayMs(h({ 'retry-after': '600' }), 0, { capMs: 15000 }), 15000);
 });
+
+test('parseJsonLoose parses plain, fenced and wrapped JSON', () => {
+    assert.deepEqual(MTLib.parseJsonLoose('{"a":1}'), { a: 1 });
+    assert.deepEqual(MTLib.parseJsonLoose('```json\n{"a":1}\n```'), { a: 1 });
+    assert.deepEqual(MTLib.parseJsonLoose('Here you go: {"a":{"b":2}} thanks'), { a: { b: 2 } });
+    assert.throws(() => MTLib.parseJsonLoose('no json here'), /Invalid JSON/);
+    assert.throws(() => MTLib.parseJsonLoose('{"a":'), /Invalid JSON/);
+});
+
+test('groupForMerge chunks items into groups of size', () => {
+    assert.deepEqual(MTLib.groupForMerge([1, 2, 3, 4, 5, 6, 7], 3), [[1, 2, 3], [4, 5, 6], [7]]);
+    assert.deepEqual(MTLib.groupForMerge([1], 3), [[1]]);
+    assert.deepEqual(MTLib.groupForMerge([], 3), []);
+});
