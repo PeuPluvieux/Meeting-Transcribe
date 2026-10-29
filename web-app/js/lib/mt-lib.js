@@ -71,7 +71,30 @@
         return groups;
     }
 
-    const api = { namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, parseJsonLoose, groupForMerge };
+    // ==================== RECORDING DRAFTS ====================
+    const DRAFT_VERSION = 1;
+
+    function buildDraft(s, now) {
+        const md = s.meetingData || {};
+        return {
+            v: DRAFT_VERSION, id: s.id, startedAt: s.startedAt, updatedAt: now, tabId: s.tabId,
+            title: s.title || '', elapsedSeconds: s.elapsedSeconds || 0,
+            currentSegmentId: s.currentSegmentId || 0,
+            speakers: s.speakers || {}, nextSpeakerNum: s.nextSpeakerNum || 1,
+            meetingData: { transcript: md.transcript || [], bookmarks: md.bookmarks || [], fullTranscript: md.fullTranscript || '' }
+        };
+    }
+
+    // Own tab -> the page was reloaded or crashed: recover now.
+    // Other tab -> only when stale; a live recording keeps refreshing updatedAt (hidden tabs may throttle to ~1/min).
+    function isRecoverableDraft(d, now, { tabId, staleMs = 90000 } = {}) {
+        if (!d || d.v !== DRAFT_VERSION || typeof d.updatedAt !== 'number') return false;
+        if (!Array.isArray(d.meetingData?.transcript) || d.meetingData.transcript.length === 0) return false;
+        if (tabId && d.tabId === tabId) return true;
+        return now - d.updatedAt > staleMs;
+    }
+
+    const api = { namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, parseJsonLoose, groupForMerge, DRAFT_VERSION, buildDraft, isRecoverableDraft };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTLib = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

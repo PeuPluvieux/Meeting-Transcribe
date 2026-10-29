@@ -177,6 +177,13 @@ const UI_STRINGS = {
         summaryNotGenerated: 'Summary Not Generated',
         summaryRetryHint: 'Your transcript is saved in History. Use Retry Summary when the AI service is available.',
         saveFailedDraftKept: 'Failed to save meeting — your draft copy is kept.',
+        recoverPrompt: 'Unfinished meeting found ({min} min, started {time}).',
+        recoverBtn: 'Recover', discardBtn: 'Discard',
+        discardConfirm: 'Discard the unfinished meeting? This cannot be undone.',
+        recovered: 'Meeting recovered and saved to History. Run Summary when ready.',
+        draftFull: 'Autosave storage is full — the transcript is kept in memory only. Stop and save soon.',
+        newMeetingConfirm: 'Stop the current recording? It will be saved to History first.',
+        previousSaved: 'Previous meeting saved to History.',
     },
     'zh-TW': {
         headerTitle: 'AI 會議記錄',
@@ -212,6 +219,13 @@ const UI_STRINGS = {
         summaryNotGenerated: '尚未產生摘要',
         summaryRetryHint: '逐字稿已儲存在歷史紀錄中。AI 服務恢復後請按「重試摘要」。',
         saveFailedDraftKept: '儲存會議失敗 — 草稿已保留。',
+        recoverPrompt: '發現未完成的會議（{min} 分鐘，開始於 {time}）。',
+        recoverBtn: '復原', discardBtn: '捨棄',
+        discardConfirm: '確定要捨棄未完成的會議嗎？此動作無法復原。',
+        recovered: '會議已復原並儲存至歷史紀錄。準備好後請按「產生摘要」。',
+        draftFull: '自動儲存空間已滿 — 逐字稿僅保留在記憶體中，請盡快停止並儲存。',
+        newMeetingConfirm: '要停止目前的錄音嗎？會先儲存到歷史紀錄。',
+        previousSaved: '上一場會議已儲存至歷史紀錄。',
     }
 };
 
@@ -1422,12 +1436,103 @@ async function ollamaTranslate(text, srcLang, tgtLang) {
     }
 }
 
+// ==================== DRAFTS (autosave + crash recovery) ====================
+// localStorage, not IndexedDB, so B1 needs no DB version bump (rolling main back stays safe).
+const DRAFT_KEY = 'draft_meeting';
+const TAB_ID = sessionStorage.getItem('mt_tab_id') || (() => { const id = generateUUID(); sessionStorage.setItem('mt_tab_id', id); return id; })();
+let _draftTimer = null;
+let _draftHeartbeat = null;
+let _draftStartedAt = null;
+let _draftQuotaWarned = false;
+
+function writeDraft() {
+    if (!currentMeetingId || !meetingData.transcript.length) return;
+    const draft = MTLib.buildDraft({
+        id: currentMeetingId, startedAt: _draftStartedAt, tabId: TAB_ID,
+        title: document.getElementById('meetingTitle')?.value || '',
+        elapsedSeconds: getElapsedSeconds(), currentSegmentId, speakers, nextSpeakerNum, meetingData
+    }, Date.now());
+    try {
+        appStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch (e) {
+        if (!_draftQuotaWarned) { _draftQuotaWarned = true; showToast(t('draftFull'), 'warning'); }
+    }
+}
+
+function scheduleDraftSave() {
+    if (!['recording', 'paused', 'stopping'].includes(appState) || _draftTimer) return;
+    _draftTimer = setTimeout(() => { _draftTimer = null; writeDraft(); }, 2000);
+}
+
+function startDraftHeartbeat() {
+    stopDraftHeartbeat();
+    _draftHeartbeat = setInterval(writeDraft, 5000);
+}
+
+function stopDraftHeartbeat() {
+    if (_draftHeartbeat) { clearInterval(_draftHeartbeat); _draftHeartbeat = null; }
+}
+
+function clearDraft() {
+    clearTimeout(_draftTimer); _draftTimer = null;
+    stopDraftHeartbeat();
+    appStorage.removeItem(DRAFT_KEY);
+    _draftQuotaWarned = false;
+}
+
+function _readDraft() {
+    try { return JSON.parse(appStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { return null; }
+}
+
+function checkDraftRecovery() {
+    const draft = _readDraft();
+    if (!draft) return;
+    if (!MTLib.isRecoverableDraft(draft, Date.now(), { tabId: TAB_ID })) {
+        if (!draft.meetingData?.transcript?.length && Date.now() - (draft.updatedAt || 0) > 90000) clearDraft(); // empty leftovers
+        return;
+    }
+    const banner = document.getElementById('recoveryBanner');
+    if (!banner) return;
+    const minutes = Math.max(1, Math.round((draft.elapsedSeconds || 0) / 60));
+    const time = new Date(draft.startedAt || draft.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    document.getElementById('recoveryText').textContent = t('recoverPrompt').replace('{min}', minutes).replace('{time}', time);
+    document.getElementById('recoverBtn').textContent = t('recoverBtn');
+    document.getElementById('discardDraftBtn').textContent = t('discardBtn');
+    banner.style.display = 'flex';
+}
+
+async function recoverDraft() {
+    const d = _readDraft();
+    if (!d) return;
+    meetingData = { transcript: d.meetingData.transcript, bookmarks: d.meetingData.bookmarks || [],
+        fullTranscript: d.meetingData.fullTranscript || '', summary: '', keyPoints: [], keyDecisions: [],
+        actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null,
+        summaryStatus: 'pending', summaryError: null };
+    currentSegmentId = d.currentSegmentId || meetingData.transcript.length;
+    currentMeetingId = d.id;
+    speakers = d.speakers || {};
+    nextSpeakerNum = d.nextSpeakerNum || 1;
+    const timerEl = document.getElementById('timer');
+    if (timerEl) timerEl.textContent = formatTime(d.elapsedSeconds || 0);
+    if (d.title && document.getElementById('meetingTitle')) document.getElementById('meetingTitle').value = d.title;
+    document.getElementById('recoveryBanner').style.display = 'none';
+    if (await saveCurrentMeeting({ silent: true })) clearDraft();
+    updateSpeakersList();
+    displayResults();
+    setAppState('done');
+    showToast(t('recovered'), 'success');
+}
+
+function discardDraft() {
+    if (!confirm(t('discardConfirm'))) return;
+    clearDraft();
+    document.getElementById('recoveryBanner').style.display = 'none';
+}
+
 // ==================== TRANSCRIPT SEGMENTS ====================
 let currentMeetingId = null;
 
 const _normalizeForDedup = s => s.trim().replace(/[.!?。？！…,，、]+$/, '').replace(/\s+/g, ' ').toLowerCase();
-
-function scheduleDraftSave() {} // TEMP stub — Task 7 replaces this
 
 function addTranscriptSegment(text, source = 'mic', { startSeconds } = {}) {
     if (!text.trim()) return;
@@ -1787,6 +1892,10 @@ async function startRecording() {
     const _ltEl = document.getElementById('liveTranscript');
     if (_ltEl) _ltEl.innerHTML = `<p class="placeholder">${t('transcriptPlaceholder')}</p>`;
     recordingStartTime = Date.now(); pausedDuration = 0; pauseStartTime = null;
+    currentMeetingId = generateUUID();   // draft and saved meeting share one id -> recovery is idempotent
+    _draftStartedAt = Date.now();
+    clearDraft();
+    startDraftHeartbeat();
     setAppState('recording');
     startTimer();
     const badge = document.getElementById('micBadge');
@@ -1794,6 +1903,7 @@ async function startRecording() {
     const started = DEV_PARAMS.has('nomic') ? true
         : micProvider === 'gladia' ? await startGladiaMic() : await startSpeechRecognition();
     if (!started) {
+        clearDraft();
         setAppState('idle');
         stopTimer();
         if (badge) badge.style.display = 'none';
@@ -1807,6 +1917,7 @@ function pauseRecording() {
 
     pauseStartTime = Date.now();
     setAppState('paused');
+    writeDraft();
     stopTimer();
 
     const micBadge = document.getElementById('micBadge');
@@ -1905,8 +2016,6 @@ function updateRecordingUI() {
 }
 
 // ==================== PROCESSING ====================
-function clearDraft() {} // TEMP stub — Task 7 replaces this
-
 async function processRecording() {
     if (!meetingData.transcript.length) {
         showToast('No transcript recorded.', 'warning');
@@ -2715,13 +2824,15 @@ function loadSettings() {
 }
 
 // ==================== NEW MEETING ====================
-function startNewMeeting() {
+async function startNewMeeting() {
     if (appState === 'recording' || appState === 'paused') {
-        if (!confirm('Stop current recording and start a new meeting?')) return;
+        if (!confirm(t('newMeetingConfirm'))) return;
         flushSpeechBuffer();
         if (getMicProvider() === 'gladia') stopGladiaMic(); else stopSpeechRecognition();
         stopSystemAudioCapture();
         stopTimer();
+        meetingData.summaryStatus = 'pending';
+        if (await saveCurrentMeeting({ silent: true })) { clearDraft(); showToast(t('previousSaved'), 'success'); }
     }
 
     meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
@@ -3436,6 +3547,7 @@ function dropBookmark(label) {
         container.scrollTop = container.scrollHeight;
     }
     showToast(`📌 Bookmark at ${ts}`, 'success');
+    scheduleDraftSave();
 }
 
 function downloadBlob(content, filename, type) {
@@ -3701,12 +3813,12 @@ function addSpeaker(name = null) {
 }
 
 function renameSpeaker(id, name) {
-    if (speakers[id]) { speakers[id].name = name; updateSpeakersList(); updateAllSpeakerLabels(); }
+    if (speakers[id]) { speakers[id].name = name; updateSpeakersList(); updateAllSpeakerLabels(); scheduleDraftSave(); }
 }
 
 function assignSpeaker(segId, speakerId) {
     const seg = meetingData.transcript.find(s => s.id === segId);
-    if (seg) { seg.speaker = speakerId; renderSegmentWithSpeaker(segId); }
+    if (seg) { seg.speaker = speakerId; renderSegmentWithSpeaker(segId); scheduleDraftSave(); }
 }
 
 function getSpeakerBadgeHTML(speakerId) {
@@ -3833,6 +3945,7 @@ function saveSegmentEdit(segId) {
     seg.editedAt = Date.now();
     rebuildFullTranscript();
     renderSegment(segId);
+    scheduleDraftSave();
     editingSegmentId = null;
     showToast('Edit saved', 'success');
 }
@@ -4140,6 +4253,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadSettings();
     initSpeakers();
     setAppState('idle');
+    checkDraftRecovery();
     // Must be served via http(s):// — Web Speech API is blocked on file://
     if (window.location.protocol === 'file:') {
         const warn = document.getElementById('browserWarning');

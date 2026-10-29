@@ -81,3 +81,37 @@ test('groupForMerge chunks items into groups of size', () => {
     assert.deepEqual(MTLib.groupForMerge([1], 3), [[1]]);
     assert.deepEqual(MTLib.groupForMerge([], 3), []);
 });
+
+const sampleState = () => ({
+    id: 'm1', startedAt: 1000, tabId: 'tabA', title: 'Weekly OQC', elapsedSeconds: 125,
+    currentSegmentId: 2, speakers: { 'speaker-1': { id: 'speaker-1', name: 'Ann' } }, nextSpeakerNum: 2,
+    meetingData: { transcript: [{ id: 0, original: 'hi' }, { id: 1, original: 'there' }], bookmarks: [], fullTranscript: 'hi there ', summary: 'ignored' }
+});
+
+test('buildDraft keeps only recoverable fields and stamps updatedAt', () => {
+    const d = MTLib.buildDraft(sampleState(), 5000);
+    assert.equal(d.v, MTLib.DRAFT_VERSION);
+    assert.equal(d.updatedAt, 5000);
+    assert.equal(d.tabId, 'tabA');
+    assert.equal(d.meetingData.transcript.length, 2);
+    assert.equal(d.meetingData.summary, undefined);
+    assert.equal(d.speakers['speaker-1'].name, 'Ann');
+});
+
+test('isRecoverableDraft: own tab (reload/crash) is recoverable immediately', () => {
+    const d = MTLib.buildDraft(sampleState(), 5000);
+    assert.equal(MTLib.isRecoverableDraft(d, 5001, { tabId: 'tabA' }), true);
+});
+
+test('isRecoverableDraft: another tab only when stale (that tab may still be recording)', () => {
+    const d = MTLib.buildDraft(sampleState(), 5000);
+    assert.equal(MTLib.isRecoverableDraft(d, 5000 + 30000, { tabId: 'tabB' }), false);
+    assert.equal(MTLib.isRecoverableDraft(d, 5000 + 91000, { tabId: 'tabB' }), true);
+});
+
+test('isRecoverableDraft rejects empty, malformed and wrong-version drafts', () => {
+    assert.equal(MTLib.isRecoverableDraft(null, 0), false);
+    assert.equal(MTLib.isRecoverableDraft({ v: 99 }, 0), false);
+    const empty = MTLib.buildDraft({ ...sampleState(), meetingData: { transcript: [], bookmarks: [], fullTranscript: '' } }, 0);
+    assert.equal(MTLib.isRecoverableDraft(empty, 999999, { tabId: 'tabA' }), false);
+});

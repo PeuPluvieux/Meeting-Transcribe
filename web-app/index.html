@@ -30,6 +30,15 @@
     <button class="btn btn-small btn-secondary" id="copySettingsBtn" onclick="copySettingsFromMain()">Copy My Settings From Main App</button>
 </div>
 
+<!-- Unfinished-meeting recovery -->
+<div id="recoveryBanner" class="browser-warning" style="display:none;">
+    <span id="recoveryText"></span>
+    <span>
+        <button class="btn btn-small btn-primary" id="recoverBtn" onclick="recoverDraft()">Recover</button>
+        <button class="btn btn-small btn-ghost" id="discardDraftBtn" onclick="discardDraft()">Discard</button>
+    </span>
+</div>
+
 <!-- Audio quality warning -->
 <div id="audioQualityWarning" class="audio-quality-warning" style="display:none;">
     <span>⚠️ <strong>Poor audio quality detected</strong> — speech is being lost. Check your microphone, reduce background noise, or try moving closer to the mic.</span>
