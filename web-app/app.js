@@ -1504,9 +1504,9 @@ function checkDraftRecovery() {
 }
 
 async function recoverDraft({ quiet = false } = {}) {
-    if (!['idle', 'done'].includes(appState)) return false;
+    if (!['idle', 'done'].includes(appState)) return null;
     const d = _readDraft();
-    if (!d) return false;
+    if (!d) return null;
     meetingData = { transcript: d.meetingData.transcript, bookmarks: d.meetingData.bookmarks || [],
         fullTranscript: d.meetingData.fullTranscript || '', summary: '', keyPoints: [], keyDecisions: [],
         actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null,
@@ -1879,12 +1879,21 @@ function handleRecordButton() {
     }
 }
 
+let _startingRecording = false;
 async function startRecording() {
+    if (_startingRecording) return;
+    _startingRecording = true;
+    try { await _startRecordingImpl(); } finally { _startingRecording = false; }
+}
+
+async function _startRecordingImpl() {
     const micProvider = getMicProvider();
     if (micProvider === 'webspeech' && !DEV_PARAMS.has('nomic') && !checkSpeechSupport()) return;
     // Never wipe an unrecovered crashed meeting: save it to History first.
     if (MTLib.isRecoverableDraft(_readDraft(), Date.now(), { tabId: TAB_ID })) {
-        if (await recoverDraft({ quiet: true })) showToast(t('draftAutoSaved'), 'info');
+        const r = await recoverDraft({ quiet: true });   // true = saved, false = save failed, null = guard/no draft
+        if (r === false) { checkDraftRecovery(); return; }   // keep the draft; saveCurrentMeeting already toasted
+        if (r === true) showToast(t('draftAutoSaved'), 'info');
     }
     if (appState === 'done') {
         meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
