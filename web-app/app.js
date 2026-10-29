@@ -78,6 +78,20 @@ async function getReplayStream() {
     return dest.stream;
 }
 
+// ==================== MODEL IDS (single place to update) ====================
+// Groq IDs verified against GET /openai/v1/models on 2026-10-29 (see Task 5 Step 1).
+const MODELS = {
+    groqWhisperLive: ['whisper-large-v3-turbo', 'whisper-large-v3'], // separate quotas → automatic fallback
+    groqChat: [
+        { id: 'openai/gpt-oss-120b', extra: { reasoning_effort: 'low' } },
+        { id: 'qwen/qwen3.8-27b',   extra: {} },
+        { id: 'openai/gpt-oss-20b', extra: { reasoning_effort: 'low' } },
+    ],
+    claudeSummary: 'claude-sonnet-5-5',
+    claudeTranslate: 'claude-haiku-5-5',
+    gemini: 'gemini-2.5-flash',
+};
+
 // ==================== APP STATE ====================
 let appState = 'idle';
 
@@ -143,6 +157,10 @@ const UI_STRINGS = {
         liveTranscriptHeader: '📝 Live Transcript',
         displayModeBoth: 'Original + Translation', displayModeTransOnly: 'Translation Only', displayModeOrigOnly: 'Original Only',
         clearTranscriptBtn: 'Clear',
+        failedChunks: '⚠ {n} Audio Chunks Failed · Retry',
+        groqKeyRejected: 'Groq key rejected — check it in Settings.',
+        chunksStillFailing: '{n} chunks still failing.',
+        chunksRecovered: 'Recovered all audio chunks.',
         bookmarkBtn: '📌 Bookmark',
         addMeetingAudio: '🖥️ Add Meeting Audio',
         transcriptPlaceholder: 'Transcript will appear here as you speak…',
@@ -169,6 +187,10 @@ const UI_STRINGS = {
         liveTranscriptHeader: '📝 即時逐字稿',
         displayModeBoth: '原文 + 翻譯', displayModeTransOnly: '僅翻譯', displayModeOrigOnly: '僅原文',
         clearTranscriptBtn: '清除',
+        failedChunks: '⚠ {n} 段音訊失敗 · 重試',
+        groqKeyRejected: 'Groq 金鑰無效 — 請到設定檢查。',
+        chunksStillFailing: '仍有 {n} 段音訊失敗。',
+        chunksRecovered: '已復原所有音訊段落。',
         bookmarkBtn: '📌 書籤',
         addMeetingAudio: '🖥️ 加入會議音訊',
         transcriptPlaceholder: '開始說話後，逐字稿將顯示於此…',
@@ -349,6 +371,10 @@ let systemAudioRecorderActive = false;
 let systemAudioChunks = [];
 let systemAudioChunkTimer = null;
 let systemAudioChunkStartTime = null;
+let systemAudioChunkStartElapsed = 0;          // recording-time (s) when the current chunk began
+const pendingMeetingJobs = new Set();          // in-flight transcription promises (awaited on Stop)
+let failedMeetingChunks = [];                  // chunks that exhausted every retry/fallback
+let _groqKeyErrorShown = false;
 const SYSTEM_AUDIO_CHUNK_MS = 12000; // 12s chunks
 
 // ==================== LOCAL WHISPER (Transformers.js) ====================
@@ -638,7 +664,7 @@ async function startSystemAudioCapture() {
                 const blob = new Blob(systemAudioChunks, { type: mimeType });
                 systemAudioChunks = [];
                 systemAudioChunkStartTime = null;
-                transcribeSystemAudioChunk(blob);
+                transcribeSystemAudioChunk(blob, systemAudioChunkStartElapsed);
             } else {
                 systemAudioChunks = [];
                 systemAudioChunkStartTime = null;
@@ -647,6 +673,7 @@ async function startSystemAudioCapture() {
         systemAudioRecorderActive = true;
         systemAudioRecorder.start(SYSTEM_AUDIO_CHUNK_MS);
         systemAudioChunkStartTime = Date.now();
+        systemAudioChunkStartElapsed = getElapsedSeconds();
         showSystemAudioIndicator();
         systemAudioChunkTimer = setInterval(() => {
             if (systemAudioRecorder?.state === 'recording') {
@@ -655,6 +682,7 @@ async function startSystemAudioCapture() {
                     if (appState === 'recording' && systemAudioActive) {
                         systemAudioRecorder.start(SYSTEM_AUDIO_CHUNK_MS);
                         systemAudioChunkStartTime = Date.now();
+                        systemAudioChunkStartElapsed = getElapsedSeconds();
                         showSystemAudioIndicator();
                     }
                 }, 200);
@@ -732,48 +760,107 @@ async function transcribeLocalWhisper(blob) {
     }
 }
 
-async function transcribeSystemAudioChunk(blob) {
+function buildWhisperForm(blob, model, sourceLang) {
+    const formData = new FormData();
+    formData.append('file', blob, 'audio.webm');
+    formData.append('model', model);
+    formData.append('response_format', 'json');
+    if (sourceLang.includes('+')) {
+        formData.append('prompt', 'MiTAC Computing Technology QA/OQC meeting. Conducted in Taiwanese Mandarin (台灣中文) and English. Speakers frequently switch languages mid-sentence. Transcribe ALL speech — use Traditional Chinese characters (繁體中文) for Mandarin, keep English as-is. Preserve these terms exactly: OQC, IPQC, DPPM, MDI, NCR, CAPA, FAI, BMC, iDRAC, PTU, PN, SN, ZOU, HOU. Do not translate. Common patterns: "OQC 這邊發現", "DPPM 超標", "NCR 要開", "這個 PN 的 issue".');
+    } else {
+        formData.append('language', sourceLang.split('-')[0]);
+    }
+    return formData;
+}
+
+// Tries each model in MODELS.groqWhisperLive with retry-after-aware retries.
+// Returns transcript text ('' for silence); throws only when every option is exhausted.
+async function groqWhisper(blob, groqKey, sourceLang) {
+    let lastErr;
+    for (const model of MODELS.groqWhisperLive) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+            let resp;
+            try {
+                resp = await groqFetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + groqKey },
+                    body: buildWhisperForm(blob, model, sourceLang),
+                    signal: AbortSignal.timeout(30000)
+                });
+            } catch (e) { lastErr = e; await sleep(1000 * (attempt + 1)); continue; } // network/timeout
+            if (resp.ok) { const data = await resp.json(); return data.text?.trim() || ''; }
+            const err = await resp.json().catch(() => ({}));
+            lastErr = new Error(`${err.error?.message || 'Transcription failed'} (HTTP ${resp.status})`);
+            if (resp.status === 429) {
+                // Long cooldown on this model → switch to the next model now instead of stalling live captions
+                if ((MTLib.parseDurationMs(resp.headers.get('retry-after')) ?? 0) > 15000) break;
+                await sleep(MTLib.retryDelayMs(h => resp.headers.get(h), attempt, { capMs: 15000 }));
+                continue;
+            }
+            if (resp.status >= 500) { await sleep(1000 * (attempt + 1)); continue; }
+            if (resp.status === 401) {
+                if (!_groqKeyErrorShown) { _groqKeyErrorShown = true; showToast(t('groqKeyRejected'), 'error'); }
+                throw lastErr;
+            }
+            if (resp.status === 404 || (resp.status === 400 && /model/i.test(lastErr.message))) break; // model retired → next
+            throw lastErr;
+        }
+    }
+    throw lastErr || new Error('Transcription failed');
+}
+
+function trackMeetingJob(promise) {
+    pendingMeetingJobs.add(promise);
+    promise.finally(() => pendingMeetingJobs.delete(promise));
+    return promise;
+}
+
+function updateFailedChunksUI() {
+    const btn = document.getElementById('failedChunksBtn');
+    if (!btn) return;
+    const n = failedMeetingChunks.length;
+    btn.style.display = n ? '' : 'none';
+    btn.textContent = t('failedChunks').replace('{n}', n);
+}
+
+async function retryFailedChunks({ quiet = false } = {}) {
+    const groqKey = appStorage.getItem('groq_api_key');
+    if (!groqKey || !failedMeetingChunks.length) return;
+    const batch = failedMeetingChunks;
+    failedMeetingChunks = [];
+    updateFailedChunksUI();
+    const sourceLang = appStorage.getItem('source_lang') || 'en-US';
+    for (const chunk of batch) {
+        try {
+            const text = await groqWhisper(chunk.blob, groqKey, sourceLang);
+            if (text) addTranscriptSegment(text, 'meeting', { startSeconds: chunk.startSeconds });
+        } catch (e) {
+            failedMeetingChunks.push(chunk);
+        }
+    }
+    updateFailedChunksUI();
+    if (!quiet) showToast(failedMeetingChunks.length ? t('chunksStillFailing').replace('{n}', failedMeetingChunks.length) : t('chunksRecovered'), failedMeetingChunks.length ? 'warning' : 'success');
+}
+
+function transcribeSystemAudioChunk(blob, startSeconds) {
     removeSystemAudioIndicator();
     const meetingProvider = appStorage.getItem('meeting_transcription_provider') || 'groq';
-    if (meetingProvider === 'local') { await transcribeLocalWhisper(blob); return; }
+    if (meetingProvider === 'local') return trackMeetingJob(transcribeLocalWhisper(blob));
     const groqKey = appStorage.getItem('groq_api_key');
-    if (!groqKey) return;
+    if (!groqKey) return Promise.resolve();
     if (blob.size < 8000) {
         console.debug('[Groq Whisper] Skipping near-silent chunk (size=' + blob.size + ')');
-        return;
+        return Promise.resolve();
     }
-    showToast('Transcribing meeting audio…', 'info');
-    try {
-        const formData = new FormData();
-        formData.append('file', blob, 'audio.webm');
-        formData.append('model', 'whisper-large-v3');
-        formData.append('response_format', 'json');
-        const sourceLang = appStorage.getItem('source_lang') || 'en-US';
-        if (sourceLang.includes('+')) {
-            // Bilingual mode: let Whisper auto-detect, provide context via prompt
-            formData.append('prompt', 'MiTAC Computing Technology QA/OQC meeting. Conducted in Taiwanese Mandarin (台灣中文) and English. Speakers frequently switch languages mid-sentence. Transcribe ALL speech — use Traditional Chinese characters (繁體中文) for Mandarin, keep English as-is. Preserve these terms exactly: OQC, IPQC, DPPM, MDI, NCR, CAPA, FAI, BMC, iDRAC, PTU, PN, SN, ZOU, HOU. Do not translate. Common patterns: "OQC 這邊發現", "DPPM 超標", "NCR 要開", "這個 PN 的 issue".');
-        } else {
-            formData.append('language', sourceLang.split('-')[0]);
-        }
-        const resp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + groqKey },
-            body: formData,
-            signal: AbortSignal.timeout(30000)
+    const sourceLang = appStorage.getItem('source_lang') || 'en-US';
+    const job = groqWhisper(blob, groqKey, sourceLang)
+        .then(text => { if (text) addTranscriptSegment(text, 'meeting', { startSeconds }); })
+        .catch(e => {
+            console.warn('[Groq Whisper] chunk failed after all retries:', e.message);
+            failedMeetingChunks.push({ blob, startSeconds });
+            updateFailedChunksUI();
         });
-        if (!resp.ok) {
-            const err = await resp.json().catch(() => ({}));
-            const msg = err.error?.message || ('HTTP ' + resp.status);
-            showToast('Meeting audio transcription failed: ' + msg, 'error');
-            console.warn('[Groq Whisper]', err);
-            return;
-        }
-        const data = await resp.json();
-        if (data.text?.trim()) addTranscriptSegment(data.text.trim(), 'meeting');
-    } catch (e) {
-        if (e.name !== 'AbortError') showToast('Meeting audio transcription failed. Check your connection.', 'error');
-        console.error('[Groq Whisper] failed:', e);
-    }
+    return trackMeetingJob(job);
 }
 
 async function handleAddMeetingAudio() {
@@ -1330,7 +1417,9 @@ let currentMeetingId = null;
 
 const _normalizeForDedup = s => s.trim().replace(/[.!?。？！…,，、]+$/, '').replace(/\s+/g, ' ').toLowerCase();
 
-function addTranscriptSegment(text, source = 'mic') {
+function scheduleDraftSave() {} // TEMP stub — Task 7 replaces this
+
+function addTranscriptSegment(text, source = 'mic', { startSeconds } = {}) {
     if (!text.trim()) return;
     if (appState === 'stopping' || appState === 'processing') return;
     // Deduplication: skip if same text (modulo trailing punctuation) was just added within 3s.
@@ -1341,7 +1430,7 @@ function addTranscriptSegment(text, source = 'mic') {
     _lastAddedAt = now;
     const corrected = applyKnowledgeBase(text);
     const filtered = filterFillerWords(corrected || text);
-    const elapsed = getElapsedSeconds();
+    const elapsed = Number.isFinite(startSeconds) ? startSeconds : getElapsedSeconds();
     const displayText = filtered || corrected || text;
 
     const seg = {
@@ -1423,6 +1512,7 @@ function addTranscriptSegment(text, source = 'mic') {
     if (interimElement) { interimElement.remove(); interimElement = null; }
     lastInterimTranslation = '';
     clearTimeout(interimTranslateTimer);
+    scheduleDraftSave();
 }
 
 function displaySegment(seg) {
