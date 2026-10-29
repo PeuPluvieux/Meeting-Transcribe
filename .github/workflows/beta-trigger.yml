@@ -1,0 +1,17 @@
+name: Trigger Pages deploy for beta
+
+on:
+  push:
+    branches: [beta]
+
+permissions:
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run deploy.yml on main (assembles main + beta)
+        run: gh workflow run deploy.yml --ref main --repo "${{ github.repository }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
