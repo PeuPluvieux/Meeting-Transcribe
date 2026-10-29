@@ -184,6 +184,7 @@ const UI_STRINGS = {
         draftFull: 'Autosave storage is full — the transcript is kept in memory only. Stop and save soon.',
         newMeetingConfirm: 'Stop the current recording? It will be saved to History first.',
         previousSaved: 'Previous meeting saved to History.',
+        draftAutoSaved: 'Unfinished meeting saved to History before starting a new one.',
     },
     'zh-TW': {
         headerTitle: 'AI 會議記錄',
@@ -226,6 +227,7 @@ const UI_STRINGS = {
         draftFull: '自動儲存空間已滿 — 逐字稿僅保留在記憶體中，請盡快停止並儲存。',
         newMeetingConfirm: '要停止目前的錄音嗎？會先儲存到歷史紀錄。',
         previousSaved: '上一場會議已儲存至歷史紀錄。',
+        draftAutoSaved: '已先將未完成的會議儲存至歷史紀錄，再開始新的會議。',
     }
 };
 
@@ -1501,9 +1503,10 @@ function checkDraftRecovery() {
     banner.style.display = 'flex';
 }
 
-async function recoverDraft() {
+async function recoverDraft({ quiet = false } = {}) {
+    if (!['idle', 'done'].includes(appState)) return false;
     const d = _readDraft();
-    if (!d) return;
+    if (!d) return false;
     meetingData = { transcript: d.meetingData.transcript, bookmarks: d.meetingData.bookmarks || [],
         fullTranscript: d.meetingData.fullTranscript || '', summary: '', keyPoints: [], keyDecisions: [],
         actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null,
@@ -1516,11 +1519,13 @@ async function recoverDraft() {
     if (timerEl) timerEl.textContent = formatTime(d.elapsedSeconds || 0);
     if (d.title && document.getElementById('meetingTitle')) document.getElementById('meetingTitle').value = d.title;
     document.getElementById('recoveryBanner').style.display = 'none';
-    if (await saveCurrentMeeting({ silent: true })) clearDraft();
+    const saved = await saveCurrentMeeting({ silent: true });
+    if (saved) clearDraft();
     updateSpeakersList();
     displayResults();
     setAppState('done');
-    showToast(t('recovered'), 'success');
+    if (saved && !quiet) showToast(t('recovered'), 'success');
+    return saved;
 }
 
 function discardDraft() {
@@ -1877,6 +1882,10 @@ function handleRecordButton() {
 async function startRecording() {
     const micProvider = getMicProvider();
     if (micProvider === 'webspeech' && !DEV_PARAMS.has('nomic') && !checkSpeechSupport()) return;
+    // Never wipe an unrecovered crashed meeting: save it to History first.
+    if (MTLib.isRecoverableDraft(_readDraft(), Date.now(), { tabId: TAB_ID })) {
+        if (await recoverDraft({ quiet: true })) showToast(t('draftAutoSaved'), 'info');
+    }
     if (appState === 'done') {
         meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
         currentSegmentId = 0; currentMeetingId = null;
@@ -2833,6 +2842,12 @@ async function startNewMeeting() {
         stopTimer();
         meetingData.summaryStatus = 'pending';
         if (await saveCurrentMeeting({ silent: true })) { clearDraft(); showToast(t('previousSaved'), 'success'); }
+        else {
+            // Save failed: keep meetingData + draft so nothing is lost; show the transcript so the user can retry.
+            displayResults();
+            setAppState('done');
+            return;
+        }
     }
 
     meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
