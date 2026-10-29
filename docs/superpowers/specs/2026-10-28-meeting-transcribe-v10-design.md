@@ -69,8 +69,8 @@ web-app/
     text/dedupe.js       cross-source fuzzy dedupe, hallucination filter (pure)
     text/knowledge.js    knowledge base (corrections + glossary)
     ui/*.js              record screen, transcript, results, settings, wizard, status strip, PiP, history, i18n
-  tests/index.html       in-browser runner for pure modules
-  tests/fixtures/        short sample WAVs (zh/en mix) for replay mode
+  ../tests/*.test.js     node:test unit tests for pure modules (repo root, not deployed)
+  ../tests/fixtures/     synthetic sample WAVs (zh/en mix) for replay mode
 ```
 
 Every provider implements one interface:
@@ -168,7 +168,7 @@ Restrained, glanceable: Title Case, no ALL-CAPS, hierarchy through size, weight 
 
 | Batch | Content | Ships to |
 |---|---|---|
-| **B0 Safety net** | GitHub Actions deploys `main` to `/` and branch `beta` to `/beta/` (one Pages artifact). Beta storage namespacing. `tests/index.html` runner. Replay mode (feed a WAV fixture instead of a live source). Rewrite `CLAUDE.md` to v9.9 reality. | infra |
+| **B0 Safety net** | GitHub Actions deploys `main` to `/` and branch `beta` to `/beta/` (one Pages artifact). Beta storage namespacing. `node:test` harness. Replay mode (feed a WAV fixture instead of a live source). Rewrite `CLAUDE.md` to v9.9 reality. | infra |
 | **B1 Stop the bleeding** (in-place hotfix on current `app.js`, no restructure) | D1 save before summary; D2 draft autosave + recovery; D3 flush on Stop + accept late results; D5 retry-after + re-queue; P1/P2/P3 model IDs + drop `cleaned_transcript` echo. | beta, then main after one real meeting |
 | **B2 Module split** | Mechanical move of `app.js` into `js/` modules, behaviour unchanged. Pure modules get unit tests. | beta, then main |
 | **B3 Quota scheduler + chains** | `net/scheduler.js`, persistent queue, Groq model fallback, Web Locks, model-ID boot check. | beta, then main |
@@ -177,12 +177,12 @@ Restrained, glanceable: Title Case, no ALL-CAPS, hierarchy through size, weight 
 | **B6 Onboarding + settings** | Setup wizard, Basic/Advanced settings, key test with quota readout. | beta, then main |
 | **B7 UI refresh** | Record screen, status strip, results screen, export menu, PiP update, i18n pass. | beta, then main |
 
-**Promotion rule:** a batch is merged `beta → main` only after a real meeting on `/beta/` plus a passing `tests/index.html` run. Each batch is a separate PR with its own revert point.
+**Promotion rule:** a batch is merged `beta → main` only after a real meeting on `/beta/` plus a passing `node --test tests/` run. Each batch is a separate PR with its own revert point.
 
 ---
 
 ## 5. Testing
-- **Unit (browser runner, no deps):** chunker boundaries, WAV encoder, dedupe/similarity, hallucination filter, scheduler budgeting and 429 handling (fake clock + fake fetch), summary chunk splitter, settings namespacing, DB migration v1 to v2 against a fixture DB.
+- **Unit (`node --test tests/`, Node 24, no deps):** chunker boundaries, WAV encoder, dedupe/similarity, hallucination filter, scheduler budgeting and 429 handling (fake clock + fake fetch), summary chunk splitter, settings namespacing, DB migration v1 to v2 against a fixture DB.
 - **Replay end-to-end:** feed `tests/fixtures/*.wav` through the real pipeline with real Groq calls. Check that no chunk is lost, nothing is duplicated, the last 15 s are present, and the clean pass completes.
 - **Fault injection (dev toggle):** force a 429, offline mode, a closed tab mid-recording, or a 10-minute hidden tab. In each case nothing is lost and recovery works.
 - **Manual per batch on `/beta/`:** one real Teams meeting with mixed zh/en, with and without headphones.
