@@ -11,3 +11,7 @@ tasks/
 # Claude Code internal config
 .claude/
 .claude-flow/
+
+# Test audio — real meeting recordings must never be committed
+tests/fixtures/*.wav
+!tests/fixtures/synthetic-*.wav

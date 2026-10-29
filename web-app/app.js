@@ -23,6 +23,61 @@ const APP_SETTING_KEYS = ['anthropic_api_key', 'auto_cleanup_enabled', 'auto_cle
     'target_lang', 'theme', 'transcript_display_mode', 'translation_provider', 'ui_lang', 'webhook_url',
     'meeting_ai_knowledge_base'];
 
+// ==================== DEV / TEST PARAMS ====================
+// ?replay            — "Add Meeting Audio" plays a local audio file instead of screen-share
+// ?replay=audible    — same, and you can hear it
+// ?nomic             — don't start the mic (clean replay tests)
+// ?fault=groq429:N   — first N Groq calls return 429 (retry-after: 2)
+// ?fault=groqfail    — every Groq call returns 500
+const DEV_PARAMS = new URLSearchParams(location.search);
+const REPLAY_MODE = DEV_PARAMS.has('replay');
+const _fault = (() => {
+    const f = DEV_PARAMS.get('fault') || '';
+    const m = /groq429:(\d+)/.exec(f);
+    return { groq429: m ? parseInt(m[1], 10) : 0, groqFail: f.includes('groqfail') };
+})();
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function groqFetch(url, opts) {
+    if (_fault.groqFail) {
+        return new Response(JSON.stringify({ error: { message: 'Injected failure (?fault=groqfail)' } }), { status: 500 });
+    }
+    if (_fault.groq429 > 0) {
+        _fault.groq429--;
+        return new Response(JSON.stringify({ error: { message: 'Injected rate limit (?fault=groq429)' } }),
+            { status: 429, headers: { 'retry-after': '2' } });
+    }
+    return fetch(url, opts);
+}
+
+function pickAudioFile() {
+    return new Promise((resolve, reject) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'audio/*';
+        input.onchange = () => input.files[0] ? resolve(input.files[0]) : reject(new Error('No file chosen'));
+        input.addEventListener('cancel', () => reject(Object.assign(new Error('Replay cancelled'), { name: 'NotAllowedError' })));
+        input.click();
+    });
+}
+
+async function getReplayStream() {
+    const file = await pickAudioFile();
+    const ctx = new AudioContext();
+    await ctx.resume();
+    const buf = await ctx.decodeAudioData(await file.arrayBuffer());
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const dest = ctx.createMediaStreamDestination();
+    src.connect(dest);
+    if (DEV_PARAMS.get('replay') === 'audible') src.connect(ctx.destination);
+    src.onended = () => showToast('Replay finished — press Stop to test the final flush.', 'info');
+    src.start();
+    showToast(`Replaying ${file.name} (${Math.round(buf.duration)}s)`, 'info');
+    return dest.stream;
+}
+
 // ==================== APP STATE ====================
 let appState = 'idle';
 
@@ -561,7 +616,7 @@ async function startSystemAudioCapture() {
         }
     }
     try {
-        const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        const displayStream = REPLAY_MODE ? await getReplayStream() : await navigator.mediaDevices.getDisplayMedia({
             audio: { echoCancellation: false, noiseSuppression: false, sampleRate: 16000, systemAudio: 'include' },
             video: { width: 1, height: 1, frameRate: 1 }
         });
@@ -1616,7 +1671,7 @@ function handleRecordButton() {
 
 async function startRecording() {
     const micProvider = getMicProvider();
-    if (micProvider === 'webspeech' && !checkSpeechSupport()) return;
+    if (micProvider === 'webspeech' && !DEV_PARAMS.has('nomic') && !checkSpeechSupport()) return;
     if (appState === 'done') {
         meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
         currentSegmentId = 0; currentMeetingId = null;
@@ -1636,7 +1691,8 @@ async function startRecording() {
     startTimer();
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'inline-flex';
-    const started = micProvider === 'gladia' ? await startGladiaMic() : await startSpeechRecognition();
+    const started = DEV_PARAMS.has('nomic') ? true
+        : micProvider === 'gladia' ? await startGladiaMic() : await startSpeechRecognition();
     if (!started) {
         setAppState('idle');
         stopTimer();
