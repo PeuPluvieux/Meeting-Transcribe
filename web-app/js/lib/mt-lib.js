@@ -71,6 +71,13 @@
         return groups;
     }
 
+    // Groq JSON-mode generation failures come back as HTTP 400 json_validate_failed; they are transient.
+    function isRetryableGroq400(status, body) {
+        if (status !== 400) return false;
+        const e = (body && body.error) || {};
+        return e.code === 'json_validate_failed' || /json_validate_failed|failed to generate json/i.test(String(e.message || ''));
+    }
+
     // ==================== RECORDING DRAFTS ====================
     const DRAFT_VERSION = 1;
 
@@ -94,7 +101,7 @@
         return now - d.updatedAt > staleMs;
     }
 
-    const api = { namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, parseJsonLoose, groupForMerge, DRAFT_VERSION, buildDraft, isRecoverableDraft };
+    const api = { namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, parseJsonLoose, groupForMerge, isRetryableGroq400, DRAFT_VERSION, buildDraft, isRecoverableDraft };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTLib = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

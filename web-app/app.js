@@ -717,7 +717,7 @@ async function startSystemAudioCapture() {
                 _rotationStopPending = true;
                 systemAudioRecorder.stop();
                 setTimeout(() => {
-                    if (appState === 'recording' && systemAudioActive) {
+                    if (appState === 'recording' && systemAudioActive && systemAudioRecorder?.state === 'inactive') {
                         systemAudioRecorder.start(SYSTEM_AUDIO_CHUNK_MS);
                         systemAudioChunkStartTime = Date.now();
                         systemAudioChunkStartElapsed = getElapsedSeconds();
@@ -2000,6 +2000,16 @@ async function resumeRecording() {
     setAppState('recording');
     startTimer();
 
+    // A 12 s rotation that fell inside the pause stopped the recorder and skipped its restart.
+    if (systemAudioActive && systemAudioRecorder && systemAudioRecorder.state === 'inactive') {
+        try {
+            systemAudioRecorder.start(SYSTEM_AUDIO_CHUNK_MS);
+            systemAudioChunkStartTime = Date.now();
+            systemAudioChunkStartElapsed = getElapsedSeconds();
+            showSystemAudioIndicator();
+        } catch (e) { console.warn('[System audio] restart after pause failed:', e); }
+    }
+
     if (getMicProvider() === 'gladia') await resumeGladiaMic(); else await resumeSpeechRecognition();
 
     const badge = document.getElementById('micBadge');
@@ -2100,6 +2110,7 @@ async function processRecording() {
     if (!meetingData.transcript.length) {
         showToast('No transcript recorded.', 'warning');
         clearDraft();
+        showProcessingOverlay(false);
         displayResults();
         return;
     }
@@ -2121,6 +2132,7 @@ async function runSummary() {
         return;
     }
     showProcessingOverlay(true, 'Building transcript…');
+    let saved = false;
     try {
         // Include speaker labels when available so AI can attribute action items correctly
         const transcriptText = meetingData.transcript.map(s => {
@@ -2171,13 +2183,10 @@ async function runSummary() {
         meetingData.nextSteps = (analysis.nextSteps || []).map(toStr);
         meetingData.summaryStatus = 'done';
         meetingData.summaryError = null;
-        buildCitations();
+        try { buildCitations(); } catch (e) { console.warn('[runSummary] buildCitations failed:', e); }
         showProcessingOverlay(true, 'Saving meeting…');
         await saveCurrentMeeting({ silent: true });
-        displayResults();
-        showProcessingOverlay(false);
-        showToast('Meeting processed!', 'success');
-        pushWebhook().catch(() => {});
+        saved = true;
     } catch (e) {
         showProcessingOverlay(false);
         Object.assign(meetingData, { summary: '', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [],
@@ -2185,6 +2194,15 @@ async function runSummary() {
         await saveCurrentMeeting({ silent: true });
         displayResults();
         showToast(t('summaryFailedSaved') + ' ' + e.message, 'error');
+    }
+    if (saved) {
+        // Post-save UI work: a throw here must never overwrite a good summary as 'failed'.
+        try {
+            displayResults();
+            showToast('Meeting processed!', 'success');
+            pushWebhook().catch(() => {});
+        } catch (e) { console.warn('[runSummary] post-save UI failed:', e); }
+        showProcessingOverlay(false);
     }
 }
 
@@ -2278,7 +2296,7 @@ async function claudeTranslateSegment(text) {
             },
             body: JSON.stringify({
                 model: CLAUDE_TRANSLATE_MODEL,
-                max_tokens: 512,
+                max_tokens: 1024,
                 system: MITAC_SEGMENT_TRANSLATE_PROMPT,
                 messages: [{ role: 'user', content: text }]
             }),
@@ -2289,7 +2307,7 @@ async function claudeTranslateSegment(text) {
             return null;
         }
         const data = await resp.json();
-        const result = data.content?.[0]?.text?.trim();
+        const result = data.content?.find(b => b.type === 'text')?.text?.trim();
         return result || null;
     } catch (e) {
         return null;
@@ -2380,7 +2398,7 @@ async function _claudeAPICall(key, systemPrompt, userContent, timeoutMs = 120000
             }
 
             const data = await resp.json();
-            const content = data.content?.[0]?.text;
+            const content = data.content?.find(b => b.type === 'text')?.text;
             if (!content) throw new Error('Empty response from Claude API');
 
             // Extract JSON — Claude may wrap it in markdown code fences
@@ -2521,6 +2539,10 @@ async function groqChat({ messages, maxTokens = 2048, json = false, temperature 
                 lastErr = new Error(`${err.error?.message || 'Groq request failed'} (HTTP ${resp.status})`);
                 if (resp.status >= 500) { await sleep(1000 * (attempt + 1)); continue; }
                 if (resp.status === 404 || (resp.status === 400 && /model|decommission/i.test(lastErr.message))) break;
+                if (MTLib.isRetryableGroq400(resp.status, err)) {
+                    if (attempt === 0) continue; // retry once on the same model
+                    break;                       // then fall through to the next model
+                }
                 throw lastErr;
             }
             const data = await resp.json();
@@ -2553,7 +2575,16 @@ async function analyzeWithGroq(text) {
             maxTokens, json: true,
             onStatus: s => showProcessingOverlay(true, `${label} — ${s}`)
         });
-        return MTLib.parseJsonLoose(raw);
+        try { return MTLib.parseJsonLoose(raw); }
+        catch (e) {
+            // Malformed JSON from the model: retry the call once before failing.
+            const raw2 = await groqChat({
+                messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+                maxTokens, json: true,
+                onStatus: s => showProcessingOverlay(true, `${label} — ${s}`)
+            });
+            return MTLib.parseJsonLoose(raw2);
+        }
     };
 
     const chunks = splitIntoChunks(text, GROQ_CHUNK_CHARS);
@@ -2567,7 +2598,7 @@ async function analyzeWithGroq(text) {
         const label = `Groq: section ${i + 1} of ${chunks.length}`;
         showProcessingOverlay(true, label + '…');
         partials.push(_mapClaudeResponse(await callJson(MITAC_SYSTEM_PROMPT,
-            `PARTIAL TRANSCRIPT (section ${i + 1} of ${chunks.length}):\n\n${chunks[i]}`, label, 1500)));
+            `PARTIAL TRANSCRIPT (section ${i + 1} of ${chunks.length}):\n\n${chunks[i]}`, label, 2500)));
     }
     // Merge in groups of 3 so each merge request also fits the per-minute token budget.
     while (partials.length > 1) {
@@ -3404,7 +3435,7 @@ Write the subject line first (prefixed with "Subject: "), then a blank line, the
                 signal: AbortSignal.timeout(30000)
             });
             const data = await resp.json();
-            draft = data.content?.[0]?.text || '';
+            draft = data.content?.find(b => b.type === 'text')?.text || '';
         } else if (llmProvider === 'ollama' && ollamaConnected) {
             const model = document.getElementById('ollamaModel')?.value || 'llama3.2';
             const resp = await fetch(OLLAMA_API + '/api/chat', {

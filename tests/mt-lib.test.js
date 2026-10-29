@@ -115,3 +115,11 @@ test('isRecoverableDraft rejects empty, malformed and wrong-version drafts', () 
     const empty = MTLib.buildDraft({ ...sampleState(), meetingData: { transcript: [], bookmarks: [], fullTranscript: '' } }, 0);
     assert.equal(MTLib.isRecoverableDraft(empty, 999999, { tabId: 'tabA' }), false);
 });
+
+test('isRetryableGroq400 recognises JSON-mode failures only', () => {
+    assert.equal(MTLib.isRetryableGroq400(400, { error: { code: 'json_validate_failed', message: 'x' } }), true);
+    assert.equal(MTLib.isRetryableGroq400(400, { error: { message: 'Failed to generate JSON' } }), true);
+    assert.equal(MTLib.isRetryableGroq400(400, { error: { message: 'bad request' } }), false);
+    assert.equal(MTLib.isRetryableGroq400(500, { error: { code: 'json_validate_failed' } }), false);
+    assert.equal(MTLib.isRetryableGroq400(400, null), false);
+});
