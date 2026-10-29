@@ -1,5 +1,5 @@
 // ============================================================
-// Meeting Notes AI v9.1
+// Meeting Notes AI v9.10.0
 // Mic: Web Speech API OR Gladia (switchable) + System Audio via Groq Whisper
 // ============================================================
 
@@ -7,6 +7,21 @@
 // Paste your Groq key here to pre-load it for all users.
 // Leave empty ('') if you want users to enter it in Settings.
 const DEFAULT_GROQ_KEY = '';
+
+const APP_VERSION = '9.10.0';
+
+// ==================== CHANNEL / STORAGE NAMESPACE ====================
+// /beta/ is the same origin as the live app, so it must use separate storage.
+// `?beta` forces beta mode on localhost for testing.
+const IS_BETA = /\/beta\//.test(location.pathname) || new URLSearchParams(location.search).has('beta');
+const STORAGE_PREFIX = IS_BETA ? 'beta:' : '';
+const appStorage = MTLib.namespacedStorage(localStorage, STORAGE_PREFIX);
+// Every localStorage key this app owns. Used by "Copy My Settings From Main App".
+const APP_SETTING_KEYS = ['anthropic_api_key', 'auto_cleanup_enabled', 'auto_cleanup_limit', 'auto_correct_enabled',
+    'claude_project_url', 'filler_filter_enabled', 'gemini_api_key', 'gladia_api_key', 'groq_api_key', 'llm_provider',
+    'meeting_transcription_provider', 'mic_provider', 'mitac_gpt_url', 'ollama_model', 'openai_api_key', 'source_lang',
+    'target_lang', 'theme', 'transcript_display_mode', 'translation_provider', 'ui_lang', 'webhook_url',
+    'meeting_ai_knowledge_base'];
 
 // ==================== APP STATE ====================
 let appState = 'idle';
@@ -108,7 +123,7 @@ const UI_STRINGS = {
 };
 
 function t(key) {
-    const lang = localStorage.getItem('ui_lang') || 'en';
+    const lang = appStorage.getItem('ui_lang') || 'en';
     return UI_STRINGS[lang]?.[key] ?? UI_STRINGS.en[key] ?? key;
 }
 
@@ -177,9 +192,9 @@ function applyUiLanguage(lang) {
 }
 
 function toggleUiLanguage() {
-    const current = localStorage.getItem('ui_lang') || 'en';
+    const current = appStorage.getItem('ui_lang') || 'en';
     const next = current === 'en' ? 'zh-TW' : 'en';
-    localStorage.setItem('ui_lang', next);
+    appStorage.setItem('ui_lang', next);
     applyUiLanguage(next);
 }
 
@@ -286,7 +301,7 @@ let gladiaAudioCtx = null;
 let gladiaProcessor = null;
 let gladiaActive = false;
 
-function getMicProvider() { return localStorage.getItem('mic_provider') || 'webspeech'; }
+function getMicProvider() { return appStorage.getItem('mic_provider') || 'webspeech'; }
 
 function checkSpeechSupport() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -316,7 +331,7 @@ async function populateMicList() {
 function initSpeechRecognition() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return false;
-    const sourceLang = localStorage.getItem('source_lang') || 'en-US';
+    const sourceLang = appStorage.getItem('source_lang') || 'en-US';
     if (recognition) { try { recognition.abort(); } catch (e) {} recognition = null; }
     recognition = new SpeechRecognition();
     // Bilingual mode: use zh-TW as the primary recognition language.
@@ -360,7 +375,7 @@ function handleSpeechResult(event) {
     _lastSpeechResultAt = Date.now();
     let interimText = '';
     let finalText = '';
-    const isBilingual = (localStorage.getItem('source_lang') || '').includes('+');
+    const isBilingual = (appStorage.getItem('source_lang') || '').includes('+');
     for (let i = event.resultIndex; i < event.results.length; i++) {
         const r = event.results[i];
         // In bilingual mode, pick the alternative with the most Chinese characters if available,
@@ -523,9 +538,9 @@ function updateMicStatus(status) {
 
 // ── System Audio ──
 async function startSystemAudioCapture() {
-    const meetingProvider = localStorage.getItem('meeting_transcription_provider') || 'groq';
+    const meetingProvider = appStorage.getItem('meeting_transcription_provider') || 'groq';
     if (meetingProvider === 'groq') {
-        const groqKey = localStorage.getItem('groq_api_key');
+        const groqKey = appStorage.getItem('groq_api_key');
         if (!groqKey) {
             showToast('Add your free Groq API key in Settings, or switch Meeting Audio to Local Whisper (no key needed).', 'warning');
             const keyInput = document.getElementById('groqApiKey');
@@ -643,7 +658,7 @@ async function transcribeLocalWhisper(blob) {
                 }
             }
         }
-        const sourceLang = localStorage.getItem('source_lang') || 'en-US';
+        const sourceLang = appStorage.getItem('source_lang') || 'en-US';
         const opts = { return_timestamps: false };
         if (!sourceLang.includes('+')) opts.language = sourceLang.split('-')[0];
         const arrayBuffer = await blob.arrayBuffer();
@@ -657,9 +672,9 @@ async function transcribeLocalWhisper(blob) {
 
 async function transcribeSystemAudioChunk(blob) {
     removeSystemAudioIndicator();
-    const meetingProvider = localStorage.getItem('meeting_transcription_provider') || 'groq';
+    const meetingProvider = appStorage.getItem('meeting_transcription_provider') || 'groq';
     if (meetingProvider === 'local') { await transcribeLocalWhisper(blob); return; }
-    const groqKey = localStorage.getItem('groq_api_key');
+    const groqKey = appStorage.getItem('groq_api_key');
     if (!groqKey) return;
     if (blob.size < 8000) {
         console.debug('[Groq Whisper] Skipping near-silent chunk (size=' + blob.size + ')');
@@ -671,7 +686,7 @@ async function transcribeSystemAudioChunk(blob) {
         formData.append('file', blob, 'audio.webm');
         formData.append('model', 'whisper-large-v3');
         formData.append('response_format', 'json');
-        const sourceLang = localStorage.getItem('source_lang') || 'en-US';
+        const sourceLang = appStorage.getItem('source_lang') || 'en-US';
         if (sourceLang.includes('+')) {
             // Bilingual mode: let Whisper auto-detect, provide context via prompt
             formData.append('prompt', 'MiTAC Computing Technology QA/OQC meeting. Conducted in Taiwanese Mandarin (台灣中文) and English. Speakers frequently switch languages mid-sentence. Transcribe ALL speech — use Traditional Chinese characters (繁體中文) for Mandarin, keep English as-is. Preserve these terms exactly: OQC, IPQC, DPPM, MDI, NCR, CAPA, FAI, BMC, iDRAC, PTU, PN, SN, ZOU, HOU. Do not translate. Common patterns: "OQC 這邊發現", "DPPM 超標", "NCR 要開", "這個 PN 的 issue".');
@@ -707,7 +722,7 @@ async function handleAddMeetingAudio() {
 
 // ==================== GLADIA MIC TRANSCRIPTION ====================
 async function startGladiaMic() {
-    const apiKey = localStorage.getItem('gladia_api_key');
+    const apiKey = appStorage.getItem('gladia_api_key');
     if (!apiKey) {
         showToast('Add your Gladia API key in Settings to use Gladia mic transcription.', 'warning');
         return false;
@@ -836,7 +851,7 @@ const FILLER_WORDS_ZH = [
 ];
 
 function filterFillerWords(text) {
-    if (localStorage.getItem('filler_filter_enabled') === 'false') return text;
+    if (appStorage.getItem('filler_filter_enabled') === 'false') return text;
     let out = text;
     // English fillers — whole-word, case-insensitive
     for (const f of FILLER_WORDS_EN) {
@@ -852,7 +867,7 @@ function filterFillerWords(text) {
 }
 
 // ==================== INDEXEDDB ====================
-const DB_NAME = 'MeetingNotesAI';
+const DB_NAME = IS_BETA ? 'MeetingNotesAI-beta' : 'MeetingNotesAI';
 const DB_VERSION = 1;
 const STORE_NAME = 'meetings';
 let db = null;
@@ -1088,7 +1103,7 @@ function onTranslationProviderChange() {
         };
         hintEl.textContent = hints[provider] || hints.google;
     }
-    localStorage.setItem('translation_provider', provider);
+    appStorage.setItem('translation_provider', provider);
 }
 
 // ==================== LANGUAGE HELPERS ====================
@@ -1173,7 +1188,7 @@ async function translateText(text, sourceLang, targetLang) {
         const cached = getCachedTranslation(text, src, targetLang);
         if (cached) return cached;
 
-        const provider = localStorage.getItem('translation_provider') || 'google';
+        const provider = appStorage.getItem('translation_provider') || 'google';
         let result = null;
 
         // 1. Ollama (if explicitly selected and connected)
@@ -1281,7 +1296,7 @@ function addTranscriptSegment(text, source = 'mic') {
     };
 
     // Per-segment language detection for bilingual mode
-    const globalSrcLang = localStorage.getItem('source_lang') || 'en-US';
+    const globalSrcLang = appStorage.getItem('source_lang') || 'en-US';
     if (globalSrcLang.includes('+')) {
         seg.language = detectTextLanguage(displayText);
         seg.languageFlag = seg.language === 'zh' ? '🇹🇼' : '🇺🇸';
@@ -1292,10 +1307,10 @@ function addTranscriptSegment(text, source = 'mic') {
     pushOverlayCaption(displayText, seg.id);
     displaySegment(seg);
 
-    const tgtLang = localStorage.getItem('target_lang') || 'en';
+    const tgtLang = appStorage.getItem('target_lang') || 'en';
     const srcLang = seg.language || globalSrcLang;
-    const translationProvider = localStorage.getItem('translation_provider') || 'google';
-    const anthropicKey = localStorage.getItem('anthropic_api_key');
+    const translationProvider = appStorage.getItem('translation_provider') || 'google';
+    const anthropicKey = appStorage.getItem('anthropic_api_key');
 
     if (tgtLang !== 'none') {
         const segmentId = seg.id;
@@ -1411,7 +1426,7 @@ function displaySegment(seg) {
     const tSpan = document.createElement('span');
     tSpan.className = 'para-trans-seg';
     tSpan.id = 'trans-' + seg.id;
-    const tgtLang = localStorage.getItem('target_lang') || 'en';
+    const tgtLang = appStorage.getItem('target_lang') || 'en';
     if (tgtLang !== 'none') {
         tSpan.innerHTML = '<span class="translating">…</span>';
     }
@@ -1465,11 +1480,11 @@ function updateInterimTranscript(text) {
     if (atBottom) container.scrollTop = container.scrollHeight;
 
     // Interim translation preview
-    const tgtLang = localStorage.getItem('target_lang') || 'en';
+    const tgtLang = appStorage.getItem('target_lang') || 'en';
     if (tgtLang !== 'none' && text.length > 3) {
         clearTimeout(interimTranslateTimer);
         interimTranslateTimer = setTimeout(async () => {
-            const globalSrc = localStorage.getItem('source_lang') || 'en-US';
+            const globalSrc = appStorage.getItem('source_lang') || 'en-US';
             const detectedLang = globalSrc.includes('+') ? detectTextLanguage(text) : null;
             const src = detectedLang || globalSrc;
             const tr = await translateText(text, src, tgtLang);
@@ -1535,7 +1550,7 @@ function setTranscriptDisplayMode(mode) {
         if (mode === 'translation') container.classList.add('mode-translation');
         else if (mode === 'original') container.classList.add('mode-original');
     }
-    localStorage.setItem('transcript_display_mode', mode);
+    appStorage.setItem('transcript_display_mode', mode);
 }
 
 // ==================== TIMER ====================
@@ -1733,7 +1748,7 @@ async function processRecording() {
         displayResults();
         return;
     }
-    const llmProvider = localStorage.getItem('llm_provider') || 'groq';
+    const llmProvider = appStorage.getItem('llm_provider') || 'groq';
     if (llmProvider === 'none') {
         meetingData.summary = 'AI summary disabled.';
         meetingData.keyPoints = [];
@@ -1843,7 +1858,7 @@ async function analyzeWithOllama(text) {
 }
 
 async function analyzeWithOpenAI(text) {
-    const key = localStorage.getItem('openai_api_key');
+    const key = appStorage.getItem('openai_api_key');
     if (!key) throw new Error('OpenAI API key not configured. Add it in Settings.');
     const resp = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -1887,7 +1902,7 @@ const CLAUDE_MAX_CHUNK_CHARS = 120000;
  * Gray-to-black UX: caller marks span as seg-pending before calling; removes on resolution.
  */
 async function claudeTranslateSegment(text) {
-    const key = localStorage.getItem('anthropic_api_key');
+    const key = appStorage.getItem('anthropic_api_key');
     if (!key || !text?.trim()) return null;
     try {
         const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -2024,7 +2039,7 @@ async function _claudeAPICall(key, systemPrompt, userContent, timeoutMs = 120000
  * Long meetings: sentence-boundary chunking → per-chunk extraction → final merge.
  */
 async function analyzeWithAnthropic(text) {
-    const key = localStorage.getItem('anthropic_api_key');
+    const key = appStorage.getItem('anthropic_api_key');
     if (!key) throw new Error('Anthropic API key not configured. Add it in Settings.');
 
     const chunks = splitIntoChunks(text, CLAUDE_CHUNK_CHARS);
@@ -2084,7 +2099,7 @@ function _mapClaudeResponse(parsed) {
 }
 
 async function analyzeWithGemini(text) {
-    const key = localStorage.getItem('gemini_api_key');
+    const key = appStorage.getItem('gemini_api_key');
     if (!key) throw new Error('Google Gemini API key not configured. Add it in Settings.');
     const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`, {
         method: 'POST',
@@ -2107,7 +2122,7 @@ async function analyzeWithGemini(text) {
 }
 
 async function analyzeWithGroq(text) {
-    const groqKey = localStorage.getItem('groq_api_key');
+    const groqKey = appStorage.getItem('groq_api_key');
     if (!groqKey) throw new Error('Groq API key not configured. Add it in Settings.');
 
     // Groq free tier: 6,000 TPM — keep chunks small so each call stays under the limit
@@ -2364,28 +2379,28 @@ function toggleDarkMode() {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
     if (isDark) {
         document.documentElement.removeAttribute('data-theme');
-        localStorage.setItem('theme', 'light');
+        appStorage.setItem('theme', 'light');
         document.getElementById('darkToggleBtn').textContent = '🌙';
     } else {
         document.documentElement.setAttribute('data-theme', 'dark');
-        localStorage.setItem('theme', 'dark');
+        appStorage.setItem('theme', 'dark');
         document.getElementById('darkToggleBtn').textContent = '☀️';
     }
 }
 
 function saveMeetingTitle() {
     const val = document.getElementById('meetingTitle')?.value || '';
-    localStorage.setItem('meeting_title_draft', val);
+    appStorage.setItem('meeting_title_draft', val);
 }
 
 function loadMeetingTitle() {
-    const saved = localStorage.getItem('meeting_title_draft') || '';
+    const saved = appStorage.getItem('meeting_title_draft') || '';
     const el = document.getElementById('meetingTitle');
     if (el) el.value = saved;
 }
 
 function loadTheme() {
-    const saved = localStorage.getItem('theme');
+    const saved = appStorage.getItem('theme');
     if (saved === 'dark') {
         document.documentElement.setAttribute('data-theme', 'dark');
         const btn = document.getElementById('darkToggleBtn');
@@ -2411,51 +2426,51 @@ function onSourceLangChange() {
 
 function saveSettings() {
     const apiKey = document.getElementById('openaiKey')?.value || '';
-    if (apiKey) localStorage.setItem('openai_api_key', apiKey);
-    else localStorage.removeItem('openai_api_key');
-    localStorage.setItem('target_lang', document.getElementById('targetLang').value);
-    localStorage.setItem('source_lang', document.getElementById('sourceLang').value);
-    localStorage.setItem('llm_provider', document.getElementById('llmProvider')?.value || 'groq');
-    localStorage.setItem('ollama_model', document.getElementById('ollamaModel')?.value || 'llama3.2');
-    localStorage.setItem('auto_correct_enabled', document.getElementById('autoCorrectEnabled')?.checked ? 'true' : 'false');
-    localStorage.setItem('filler_filter_enabled', document.getElementById('fillerFilterEnabled')?.checked ? 'true' : 'false');
-    localStorage.setItem('translation_provider', document.getElementById('translationProvider')?.value || 'google');
+    if (apiKey) appStorage.setItem('openai_api_key', apiKey);
+    else appStorage.removeItem('openai_api_key');
+    appStorage.setItem('target_lang', document.getElementById('targetLang').value);
+    appStorage.setItem('source_lang', document.getElementById('sourceLang').value);
+    appStorage.setItem('llm_provider', document.getElementById('llmProvider')?.value || 'groq');
+    appStorage.setItem('ollama_model', document.getElementById('ollamaModel')?.value || 'llama3.2');
+    appStorage.setItem('auto_correct_enabled', document.getElementById('autoCorrectEnabled')?.checked ? 'true' : 'false');
+    appStorage.setItem('filler_filter_enabled', document.getElementById('fillerFilterEnabled')?.checked ? 'true' : 'false');
+    appStorage.setItem('translation_provider', document.getElementById('translationProvider')?.value || 'google');
     const groqKey = document.getElementById('groqApiKey')?.value || '';
-    if (groqKey) localStorage.setItem('groq_api_key', groqKey);
-    else localStorage.removeItem('groq_api_key');
+    if (groqKey) appStorage.setItem('groq_api_key', groqKey);
+    else appStorage.removeItem('groq_api_key');
     const gladiaKey = document.getElementById('gladiaApiKey')?.value || '';
-    if (gladiaKey) localStorage.setItem('gladia_api_key', gladiaKey);
-    else localStorage.removeItem('gladia_api_key');
-    localStorage.setItem('mic_provider', document.getElementById('micProvider')?.value || 'webspeech');
-    localStorage.setItem('meeting_transcription_provider', document.getElementById('meetingTranscriptionProvider')?.value || 'groq');
+    if (gladiaKey) appStorage.setItem('gladia_api_key', gladiaKey);
+    else appStorage.removeItem('gladia_api_key');
+    appStorage.setItem('mic_provider', document.getElementById('micProvider')?.value || 'webspeech');
+    appStorage.setItem('meeting_transcription_provider', document.getElementById('meetingTranscriptionProvider')?.value || 'groq');
     const anthropicKey = document.getElementById('anthropicKey')?.value || '';
-    if (anthropicKey) localStorage.setItem('anthropic_api_key', anthropicKey);
-    else localStorage.removeItem('anthropic_api_key');
+    if (anthropicKey) appStorage.setItem('anthropic_api_key', anthropicKey);
+    else appStorage.removeItem('anthropic_api_key');
     const geminiKey = document.getElementById('geminiKey')?.value || '';
-    if (geminiKey) localStorage.setItem('gemini_api_key', geminiKey);
-    else localStorage.removeItem('gemini_api_key');
+    if (geminiKey) appStorage.setItem('gemini_api_key', geminiKey);
+    else appStorage.removeItem('gemini_api_key');
 
-    localStorage.setItem('auto_cleanup_enabled', document.getElementById('autoCleanupEnabled')?.checked ? 'true' : 'false');
-    localStorage.setItem('auto_cleanup_limit', document.getElementById('autoCleanupLimit')?.value || '10');
+    appStorage.setItem('auto_cleanup_enabled', document.getElementById('autoCleanupEnabled')?.checked ? 'true' : 'false');
+    appStorage.setItem('auto_cleanup_limit', document.getElementById('autoCleanupLimit')?.value || '10');
 
     const webhookUrl = document.getElementById('webhookUrl')?.value?.trim() || '';
-    if (webhookUrl) localStorage.setItem('webhook_url', webhookUrl);
-    else localStorage.removeItem('webhook_url');
+    if (webhookUrl) appStorage.setItem('webhook_url', webhookUrl);
+    else appStorage.removeItem('webhook_url');
 
     showToast('Settings saved!', 'success');
     toggleSettings();
 }
 
 function loadSettings() {
-    const apiKey = localStorage.getItem('openai_api_key');
+    const apiKey = appStorage.getItem('openai_api_key');
     if (apiKey && document.getElementById('openaiKey')) document.getElementById('openaiKey').value = apiKey;
 
-    const targetLang = localStorage.getItem('target_lang') || 'en';
-    const sourceLang = localStorage.getItem('source_lang') || 'en-US';
-    const llmProvider = localStorage.getItem('llm_provider') || 'groq';
-    const ollamaModel = localStorage.getItem('ollama_model') || 'llama3.2';
-    const autoCorrect = localStorage.getItem('auto_correct_enabled') !== 'false';
-    const translationProv = localStorage.getItem('translation_provider') || 'google';
+    const targetLang = appStorage.getItem('target_lang') || 'en';
+    const sourceLang = appStorage.getItem('source_lang') || 'en-US';
+    const llmProvider = appStorage.getItem('llm_provider') || 'groq';
+    const ollamaModel = appStorage.getItem('ollama_model') || 'llama3.2';
+    const autoCorrect = appStorage.getItem('auto_correct_enabled') !== 'false';
+    const translationProv = appStorage.getItem('translation_provider') || 'google';
 
     const targetEl = document.getElementById('targetLang');
     if (targetEl) targetEl.value = targetLang;
@@ -2464,34 +2479,34 @@ function loadSettings() {
     if (document.getElementById('llmProvider')) { document.getElementById('llmProvider').value = llmProvider; onLLMProviderChange(); }
     if (document.getElementById('ollamaModel')) document.getElementById('ollamaModel').value = ollamaModel;
     if (document.getElementById('autoCorrectEnabled')) document.getElementById('autoCorrectEnabled').checked = autoCorrect;
-    const fillerFilter = localStorage.getItem('filler_filter_enabled') !== 'false';
+    const fillerFilter = appStorage.getItem('filler_filter_enabled') !== 'false';
     if (document.getElementById('fillerFilterEnabled')) document.getElementById('fillerFilterEnabled').checked = fillerFilter;
     if (document.getElementById('translationProvider')) { document.getElementById('translationProvider').value = translationProv; onTranslationProviderChange(); }
 
-    const groqApiKey = localStorage.getItem('groq_api_key') || '';
+    const groqApiKey = appStorage.getItem('groq_api_key') || '';
     if (document.getElementById('groqApiKey')) document.getElementById('groqApiKey').value = groqApiKey;
-    const gladiaApiKey = localStorage.getItem('gladia_api_key') || '';
+    const gladiaApiKey = appStorage.getItem('gladia_api_key') || '';
     if (document.getElementById('gladiaApiKey')) document.getElementById('gladiaApiKey').value = gladiaApiKey;
-    const micProv = localStorage.getItem('mic_provider') || 'webspeech';
+    const micProv = appStorage.getItem('mic_provider') || 'webspeech';
     if (document.getElementById('micProvider')) { document.getElementById('micProvider').value = micProv; onMicProviderChange(); }
-    const meetingTransProv = localStorage.getItem('meeting_transcription_provider') || 'groq';
+    const meetingTransProv = appStorage.getItem('meeting_transcription_provider') || 'groq';
     if (document.getElementById('meetingTranscriptionProvider')) document.getElementById('meetingTranscriptionProvider').value = meetingTransProv;
-    const anthropicApiKey = localStorage.getItem('anthropic_api_key') || '';
+    const anthropicApiKey = appStorage.getItem('anthropic_api_key') || '';
     if (document.getElementById('anthropicKey')) document.getElementById('anthropicKey').value = anthropicApiKey;
-    const geminiApiKey = localStorage.getItem('gemini_api_key') || '';
+    const geminiApiKey = appStorage.getItem('gemini_api_key') || '';
     if (document.getElementById('geminiKey')) document.getElementById('geminiKey').value = geminiApiKey;
 
-    const displayMode = localStorage.getItem('transcript_display_mode') || 'both';
+    const displayMode = appStorage.getItem('transcript_display_mode') || 'both';
     const modeSelect = document.getElementById('transcriptDisplayMode');
     if (modeSelect) modeSelect.value = displayMode;
     setTranscriptDisplayMode(displayMode);
 
-    const autoCleanup = localStorage.getItem('auto_cleanup_enabled') === 'true';
+    const autoCleanup = appStorage.getItem('auto_cleanup_enabled') === 'true';
     if (document.getElementById('autoCleanupEnabled')) document.getElementById('autoCleanupEnabled').checked = autoCleanup;
-    const cleanupLimit = localStorage.getItem('auto_cleanup_limit') || '10';
+    const cleanupLimit = appStorage.getItem('auto_cleanup_limit') || '10';
     if (document.getElementById('autoCleanupLimit')) document.getElementById('autoCleanupLimit').value = cleanupLimit;
 
-    const webhookUrl = localStorage.getItem('webhook_url') || '';
+    const webhookUrl = appStorage.getItem('webhook_url') || '';
     if (document.getElementById('webhookUrl')) document.getElementById('webhookUrl').value = webhookUrl;
 
     getKnowledgeBase();
@@ -2856,7 +2871,7 @@ function buildProjectTranscriptMd() {
 }
 
 function saveToClaudeProject() {
-    let url = localStorage.getItem('claude_project_url');
+    let url = appStorage.getItem('claude_project_url');
     if (!url) {
         url = window.prompt('Paste your Claude Project URL (e.g. https://claude.ai/project/…):');
         if (!url) return;
@@ -2865,7 +2880,7 @@ function saveToClaudeProject() {
             showToast('Invalid URL — must start with https://claude.ai', 'error');
             return;
         }
-        localStorage.setItem('claude_project_url', url);
+        appStorage.setItem('claude_project_url', url);
     }
     const title = (document.getElementById('meetingTitle')?.value?.trim() || 'Meeting').replace(/[\\/:*?"<>|]/g, '_');
     const date = new Date().toISOString().slice(0, 10);
@@ -2876,11 +2891,11 @@ function saveToClaudeProject() {
 }
 
 function resetClaudeProjectUrl() {
-    const url = window.prompt('Paste your Claude Project URL:', localStorage.getItem('claude_project_url') || '');
+    const url = window.prompt('Paste your Claude Project URL:', appStorage.getItem('claude_project_url') || '');
     if (!url) return;
     const trimmed = url.trim();
     if (!trimmed.startsWith('https://claude.ai')) { showToast('Invalid URL — must start with https://claude.ai', 'error'); return; }
-    localStorage.setItem('claude_project_url', trimmed);
+    appStorage.setItem('claude_project_url', trimmed);
     showToast('Claude Project URL updated!', 'success');
 }
 
@@ -2900,7 +2915,7 @@ function buildMiTACTranscriptTxt() {
 }
 
 function saveToMiTACGPT() {
-    let url = localStorage.getItem('mitac_gpt_url');
+    let url = appStorage.getItem('mitac_gpt_url');
     if (!url) {
         url = window.prompt('Paste your MiTAC GPT URL (e.g. https://gpt.mitac.com/…):');
         if (!url) return;
@@ -2909,7 +2924,7 @@ function saveToMiTACGPT() {
             showToast('Invalid URL — must start with https://', 'error');
             return;
         }
-        localStorage.setItem('mitac_gpt_url', url);
+        appStorage.setItem('mitac_gpt_url', url);
     }
     const title = (document.getElementById('meetingTitle')?.value?.trim() || 'Meeting').replace(/[\\/:*?"<>|]/g, '_');
     const date = new Date().toISOString().slice(0, 10);
@@ -2920,19 +2935,19 @@ function saveToMiTACGPT() {
 }
 
 function resetMiTACGptUrl() {
-    const url = window.prompt('Paste your MiTAC GPT URL:', localStorage.getItem('mitac_gpt_url') || '');
+    const url = window.prompt('Paste your MiTAC GPT URL:', appStorage.getItem('mitac_gpt_url') || '');
     if (!url) return;
     const trimmed = url.trim();
     if (!trimmed.startsWith('https://')) { showToast('Invalid URL — must start with https://', 'error'); return; }
-    localStorage.setItem('mitac_gpt_url', trimmed);
+    appStorage.setItem('mitac_gpt_url', trimmed);
     showToast('MiTAC GPT URL updated!', 'success');
 }
 
 // ==================== AUTO CLEANUP ====================
 
 async function autoCleanupMeetings() {
-    if (localStorage.getItem('auto_cleanup_enabled') !== 'true') return;
-    const limit = parseInt(localStorage.getItem('auto_cleanup_limit') || '10');
+    if (appStorage.getItem('auto_cleanup_enabled') !== 'true') return;
+    const limit = parseInt(appStorage.getItem('auto_cleanup_limit') || '10');
     try {
         const all = await getAllMeetings(); // newest-first
         const toDelete = all.slice(limit);
@@ -2975,12 +2990,12 @@ ${next ? '- ' + next : 'None'}
 
 Write the subject line first (prefixed with "Subject: "), then a blank line, then the email body. Sign off with "Best regards."`;
 
-    const llmProvider = localStorage.getItem('llm_provider') || 'groq';
+    const llmProvider = appStorage.getItem('llm_provider') || 'groq';
     let draft = '';
 
     try {
         if (llmProvider === 'groq') {
-            const key = localStorage.getItem('groq_api_key');
+            const key = appStorage.getItem('groq_api_key');
             if (!key) throw new Error('Groq API key required');
             const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
@@ -2991,7 +3006,7 @@ Write the subject line first (prefixed with "Subject: "), then a blank line, the
             const data = await resp.json();
             draft = data.choices?.[0]?.message?.content || '';
         } else if (llmProvider === 'anthropic') {
-            const key = localStorage.getItem('anthropic_api_key');
+            const key = appStorage.getItem('anthropic_api_key');
             if (!key) throw new Error('Anthropic API key required');
             const resp = await fetch('https://api.anthropic.com/v1/messages', {
                 method: 'POST',
@@ -3168,7 +3183,7 @@ function _buildWebhookPayload() {
 }
 
 async function pushWebhook() {
-    const url = localStorage.getItem('webhook_url');
+    const url = appStorage.getItem('webhook_url');
     if (!url) return;
     try {
         const resp = await fetch(url, {
@@ -3277,7 +3292,7 @@ function escapeHtml(text) {
 // ==================== KNOWLEDGE BASE ====================
 function getKnowledgeBase() {
     if (knowledgeBase) return knowledgeBase;
-    const stored = localStorage.getItem(KB_STORAGE_KEY);
+    const stored = appStorage.getItem(KB_STORAGE_KEY);
     if (stored) {
         try { knowledgeBase = JSON.parse(stored); }
         catch (e) { knowledgeBase = createEmptyKB(); }
@@ -3294,7 +3309,7 @@ function createEmptyKB() {
 function saveKnowledgeBase() {
     if (!knowledgeBase) return;
     knowledgeBase.updated = new Date().toISOString();
-    localStorage.setItem(KB_STORAGE_KEY, JSON.stringify(knowledgeBase));
+    appStorage.setItem(KB_STORAGE_KEY, JSON.stringify(knowledgeBase));
     updateKBStats();
 }
 
@@ -3903,7 +3918,7 @@ async function importMeetingsFromFile(event) {
 document.addEventListener('DOMContentLoaded', async () => {
     try { await initDB(); } catch (e) { console.error('DB init failed:', e); }
     loadTheme();
-    applyUiLanguage(localStorage.getItem('ui_lang') || 'en');
+    applyUiLanguage(appStorage.getItem('ui_lang') || 'en');
     loadMeetingTitle();
     loadSettings();
     initSpeakers();
@@ -3920,13 +3935,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         const warn = document.getElementById('browserWarning');
         if (warn) warn.style.display = 'flex';
     }
-    const llmProv = localStorage.getItem('llm_provider') || 'groq';
+    const llmProv = appStorage.getItem('llm_provider') || 'groq';
     if (llmProv === 'ollama') checkOllamaConnection();
 
     // First-visit: no API key configured for any provider → show setup banner and open Settings
-    const provider = localStorage.getItem('llm_provider') || 'groq';
-    const hasAnyKey = localStorage.getItem('groq_api_key') || localStorage.getItem('openai_api_key') ||
-        localStorage.getItem('anthropic_api_key') || localStorage.getItem('gemini_api_key') ||
+    const provider = appStorage.getItem('llm_provider') || 'groq';
+    const hasAnyKey = appStorage.getItem('groq_api_key') || appStorage.getItem('openai_api_key') ||
+        appStorage.getItem('anthropic_api_key') || appStorage.getItem('gemini_api_key') ||
         provider === 'none' || provider === 'ollama';
     if (!hasAnyKey) {
         const warn = document.getElementById('setupBanner');
