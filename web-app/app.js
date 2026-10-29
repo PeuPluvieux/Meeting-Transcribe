@@ -172,6 +172,11 @@ const UI_STRINGS = {
         betaBanner: 'Beta Build — separate data from the main app. Meetings: export JSON in the main app, import here.',
         copySettings: 'Copy My Settings From Main App',
         settingsCopied: 'Copied {n} settings from the main app. Reloading…',
+        retrySummary: '↻ Retry Summary', runSummary: '▶ Run Summary',
+        summaryFailedSaved: 'Transcript saved. Summary failed:',
+        summaryNotGenerated: 'Summary Not Generated',
+        summaryRetryHint: 'Your transcript is saved in History. Use Retry Summary when the AI service is available.',
+        saveFailedDraftKept: 'Failed to save meeting — your draft copy is kept.',
     },
     'zh-TW': {
         headerTitle: 'AI 會議記錄',
@@ -202,6 +207,11 @@ const UI_STRINGS = {
         betaBanner: '測試版 — 資料與正式版分開。會議紀錄：在正式版匯出 JSON，再於此匯入。',
         copySettings: '從正式版複製設定',
         settingsCopied: '已從正式版複製 {n} 項設定，重新載入中…',
+        retrySummary: '↻ 重試摘要', runSummary: '▶ 產生摘要',
+        summaryFailedSaved: '逐字稿已儲存。摘要失敗：',
+        summaryNotGenerated: '尚未產生摘要',
+        summaryRetryHint: '逐字稿已儲存在歷史紀錄中。AI 服務恢復後請按「重試摘要」。',
+        saveFailedDraftKept: '儲存會議失敗 — 草稿已保留。',
     }
 };
 
@@ -1895,19 +1905,29 @@ function updateRecordingUI() {
 }
 
 // ==================== PROCESSING ====================
+function clearDraft() {} // TEMP stub — Task 7 replaces this
+
 async function processRecording() {
     if (!meetingData.transcript.length) {
         showToast('No transcript recorded.', 'warning');
+        clearDraft();
         displayResults();
         return;
     }
+    // D1: persist the transcript BEFORE any AI call — a summary failure must never lose the meeting.
+    meetingData.summaryStatus = 'pending';
+    meetingData.summaryError = null;
+    showProcessingOverlay(true, 'Saving transcript…');
+    if (await saveCurrentMeeting({ silent: true })) clearDraft(); // keep the draft if the save failed
+    await runSummary();
+}
+
+async function runSummary() {
     const llmProvider = appStorage.getItem('llm_provider') || 'groq';
     if (llmProvider === 'none') {
-        meetingData.summary = 'AI summary disabled.';
-        meetingData.keyPoints = [];
-        meetingData.keyDecisions = [];
-        meetingData.actionItems = [];
-        meetingData.nextSteps = [];
+        Object.assign(meetingData, { summary: 'AI summary disabled.', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [], summaryStatus: 'skipped' });
+        await saveCurrentMeeting({ silent: true });
+        showProcessingOverlay(false);
         displayResults();
         return;
     }
@@ -1934,11 +1954,8 @@ async function processRecording() {
         } else if (llmProvider === 'ollama') {
             showProcessingOverlay(true, 'Analyzing with Ollama…');
             if (!ollamaConnected) await checkOllamaConnection();
-            if (ollamaConnected) {
-                analysis = await analyzeWithOllama(transcriptText);
-            } else {
-                throw new Error('Ollama not connected. Start Ollama or switch to Groq in Settings.');
-            }
+            if (!ollamaConnected) throw new Error('Ollama not connected. Start Ollama or switch to Groq in Settings.');
+            analysis = await analyzeWithOllama(transcriptText);
         } else {
             analysis = { summary: 'AI summary disabled.', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [] };
         }
@@ -1953,37 +1970,41 @@ async function processRecording() {
                 if (item.context || item.Context) parts.push('Context: ' + (item.context || item.Context));
                 if (item.notes || item.Notes) parts.push('Notes: ' + (item.notes || item.Notes));
                 if (parts.length) return parts.join(' — ');
-                // Generic object: flatten to readable string
                 return Object.entries(item).map(([k, v]) => `${k}: ${v}`).join(' — ');
             }
             return String(item);
         };
-        // If Claude returned a cleaned+translated transcript, use it as the canonical full transcript
-        if (analysis.cleaned_transcript) {
-            meetingData.fullTranscript = analysis.cleaned_transcript;
-        }
+        if (analysis.cleaned_transcript) meetingData.fullTranscript = analysis.cleaned_transcript;
         meetingData.summary = typeof analysis.summary === 'string' ? analysis.summary : (analysis.summary ? String(analysis.summary) : 'No summary generated.');
         meetingData.keyPoints = (analysis.keyPoints || []).map(toStr);
         meetingData.keyDecisions = (analysis.keyDecisions || []).map(toStr);
         meetingData.actionItems = (analysis.actionItems || []).map(toStr);
         meetingData.nextSteps = (analysis.nextSteps || []).map(toStr);
+        meetingData.summaryStatus = 'done';
+        meetingData.summaryError = null;
         buildCitations();
         showProcessingOverlay(true, 'Saving meeting…');
-        await saveCurrentMeeting();
+        await saveCurrentMeeting({ silent: true });
         displayResults();
         showProcessingOverlay(false);
         showToast('Meeting processed!', 'success');
         pushWebhook().catch(() => {});
     } catch (e) {
         showProcessingOverlay(false);
-        meetingData.summary = 'Error: ' + e.message;
-        meetingData.keyPoints = [];
-        meetingData.keyDecisions = [];
-        meetingData.actionItems = [];
-        meetingData.nextSteps = [];
+        Object.assign(meetingData, { summary: '', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [],
+            summaryStatus: 'failed', summaryError: e.message });
+        await saveCurrentMeeting({ silent: true });
         displayResults();
-        showToast('Processing error: ' + e.message, 'error');
+        showToast(t('summaryFailedSaved') + ' ' + e.message, 'error');
     }
+}
+
+async function retrySummary() {
+    if (['recording', 'paused', 'stopping', 'processing'].includes(appState)) return;
+    if (!meetingData.transcript.length) return;
+    setAppState('processing');
+    await runSummary();
+    setAppState('done');
 }
 
 async function analyzeWithOllama(text) {
@@ -2441,7 +2462,12 @@ function displayResults() {
         : '';
 
     let summaryHTML = '';
-    summaryHTML += notionBlock('📝', 'Summary', `<p>${escapeHtml(meetingData.summary)}</p>`);
+    if (meetingData.summaryStatus === 'failed') {
+        summaryHTML += notionBlock('⚠️', t('summaryNotGenerated'),
+            `<p>${escapeHtml(meetingData.summaryError || '')}</p><p>${escapeHtml(t('summaryRetryHint'))}</p>`);
+    } else if (meetingData.summary) {
+        summaryHTML += notionBlock('📝', 'Summary', `<p>${escapeHtml(meetingData.summary)}</p>`);
+    }
     if (meetingData.keyPoints?.length) {
         const items = meetingData.keyPoints.map((p, i) =>
             `<li>${escapeHtml(p)}${citeBtn(meetingData.citations?.keyPoints?.[i])}</li>`).join('');
@@ -2471,6 +2497,12 @@ function displayResults() {
         : '<p class="no-items">No action items detected.</p>';
 
     makeTranscriptEditable();
+    const retryBtn = document.getElementById('btnRetrySummary');
+    if (retryBtn) {
+        const st = meetingData.summaryStatus;
+        retryBtn.style.display = (st === 'failed' || st === 'pending') ? '' : 'none';
+        retryBtn.textContent = st === 'pending' ? t('runSummary') : t('retrySummary');
+    }
     document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
 }
 
@@ -3953,6 +3985,8 @@ async function loadMeetingFromHistory(id) {
             actionItems: meeting.actionItems || [],
             actionItemsChecked: meeting.actionItemsChecked || [],
             nextSteps: meeting.nextSteps || [],
+            summaryStatus: meeting.summaryStatus || 'done',
+            summaryError: meeting.summaryError || null,
             citations: null
         };
         displayResults();
@@ -3965,12 +3999,12 @@ async function loadMeetingFromHistory(id) {
     }
 }
 
-async function saveCurrentMeeting() {
-    if (!meetingData.transcript.length) { showToast('No transcript to save', 'warning'); return; }
+async function saveCurrentMeeting({ silent = false } = {}) {
+    if (!meetingData.transcript.length) { if (!silent) showToast('No transcript to save', 'warning'); return false; }
     const id = currentMeetingId || generateUUID();
     const duration = document.getElementById('timer').textContent;
     let title = 'Meeting ' + new Date().toLocaleDateString();
-    if (meetingData.summary) title = meetingData.summary.split('.')[0].slice(0, 60);
+    if (meetingData.summary && meetingData.summaryStatus !== 'failed') title = meetingData.summary.split('.')[0].slice(0, 60);
     else if (meetingData.fullTranscript) title = meetingData.fullTranscript.slice(0, 60);
 
     let savedTimestamp = Date.now();
@@ -3984,15 +4018,19 @@ async function saveCurrentMeeting() {
         summary: meetingData.summary, keyPoints: meetingData.keyPoints,
         keyDecisions: meetingData.keyDecisions, actionItems: meetingData.actionItems,
         actionItemsChecked: meetingData.actionItemsChecked || [],
-        nextSteps: meetingData.nextSteps
+        nextSteps: meetingData.nextSteps,
+        summaryStatus: meetingData.summaryStatus || 'done',
+        summaryError: meetingData.summaryError || null
     };
     try {
         await saveMeeting(meeting);
         currentMeetingId = id;
-        showToast('Meeting saved!', 'success');
+        if (!silent) showToast('Meeting saved!', 'success');
         autoCleanupMeetings();
+        return true;
     } catch (e) {
-        showToast('Failed to save meeting', 'error');
+        showToast(t('saveFailedDraftKept') + ' ' + (e.message || ''), 'error');
+        return false;
     }
 }
 
