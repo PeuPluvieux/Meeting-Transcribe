@@ -1,5 +1,10 @@
 # Bug Log
 
+## v9.10.1 (2026-11-03) — Stop greyed out mid-meeting
+| ID | Bug | Root cause | Fix |
+|---|---|---|---|
+| D6 | Stop & Process greyed out during a real meeting while recording continued | A Web Speech `audio-capture`/`not-allowed` error mid-meeting (mic taken by Teams, headset switch, watchdog restart) set `appState=idle` while meeting audio + draft kept running; opening a History meeting mid-recording set `appState=done` and replaced `meetingData` | Mid-meeting mic errors keep the meeting recording (mic status "Mic stopped", warning toast, no reconnect loop; Pause→Resume retries mic); History load refused while recording/stopping/processing |
+
 ## v9.10.0 (2026-10-29) — B1 "Stop the Bleeding"
 | ID | Bug | Root cause | Fix |
 |---|---|---|---|

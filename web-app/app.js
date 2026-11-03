@@ -1,5 +1,5 @@
 // ============================================================
-// Meeting Notes AI v9.10.0
+// Meeting Notes AI v9.10.1
 // Mic: Web Speech API OR Gladia (switchable) + System Audio via Groq Whisper
 // ============================================================
 
@@ -8,7 +8,7 @@
 // Leave empty ('') if you want users to enter it in Settings.
 const DEFAULT_GROQ_KEY = '';
 
-const APP_VERSION = '9.10.0';
+const APP_VERSION = '9.10.1';
 
 // ==================== CHANNEL / STORAGE NAMESPACE ====================
 // /beta/ is the same origin as the live app, so it must use separate storage.
@@ -128,6 +128,10 @@ const PARA_GAP_MS = 8000; // 8s gap before a new paragraph block
 let _lastSpeechResultAt = 0;
 let _speechWatchdogTimer = null;
 const SPEECH_WATCHDOG_MS = 25000; // if no result for 25s, assume Chrome API died
+// A mic error after the meeting has started must not end the meeting (that greyed out Stop while
+// meeting audio kept recording). Only a failure before the first onstart aborts the start.
+let _speechStartedThisMeeting = false;
+let _micLost = false;
 let meetingData = {
     transcript: [],
     bookmarks: [],
@@ -463,11 +467,22 @@ function initSpeechRecognition() {
     recognition.interimResults = true;
     // In bilingual mode use more alternatives so the recognizer has better candidates for mixed speech
     recognition.maxAlternatives = sourceLang.includes('+') ? 3 : 1;
-    recognition.onstart = () => { speechActive = true; _lastSpeechResultAt = Date.now(); updateMicStatus('listening'); };
+    recognition.onstart = () => { _speechStartedThisMeeting = true; _micLost = false; speechActive = true; _lastSpeechResultAt = Date.now(); updateMicStatus('listening'); };
     // Finals can arrive just after pause/stop — accept them so the last sentence isn't lost.
     recognition.onresult = (event) => { if (['recording', 'paused', 'stopping'].includes(appState)) handleSpeechResult(event); };
     recognition.onerror = (event) => {
         if (event.error === 'no-speech') return;
+        const fatal = ['not-allowed', 'service-not-allowed', 'audio-capture'].includes(event.error);
+        if (fatal && (_speechStartedThisMeeting || systemAudioActive) && ['recording', 'paused'].includes(appState)) {
+            // Mid-meeting: keep recording (meeting audio, timer, draft) so Stop & Process still works.
+            stopSpeechWatchdog();
+            clearTimeout(_recognitionReconnectTimer); _recognitionReconnectTimer = null;
+            flushSpeechBuffer();
+            if (!_micLost) showToast('Microphone stopped (' + event.error + '). Recording continues — Pause then Resume to retry the mic, or press Stop & Process.', 'warning');
+            _micLost = true;
+            updateMicStatus('lost');
+            return;
+        }
         if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
             showToast('Microphone permission denied. Allow mic access and try again.', 'error');
             setAppState('idle'); stopTimer(); return;
@@ -480,6 +495,7 @@ function initSpeechRecognition() {
     };
     recognition.onend = () => {
         speechActive = false;
+        if (_micLost) { updateMicStatus('lost'); return; }   // no reconnect loop on a dead mic
         updateMicStatus(appState === 'recording' ? 'reconnecting' : 'idle');
         if (appState === 'recording') {
             clearTimeout(_recognitionReconnectTimer);
@@ -573,7 +589,7 @@ function startSpeechWatchdog() {
     stopSpeechWatchdog();
     _lastSpeechResultAt = Date.now();
     _speechWatchdogTimer = setInterval(() => {
-        if (appState !== 'recording' || getMicProvider() !== 'webspeech') {
+        if (appState !== 'recording' || getMicProvider() !== 'webspeech' || _micLost) {
             stopSpeechWatchdog();
             return;
         }
@@ -633,6 +649,7 @@ function pauseSpeechRecognition() {
 
 async function resumeSpeechRecognition() {
     speechSentenceBuffer = '';
+    if (_micLost) { _micLost = false; startSpeechWatchdog(); }   // Resume = user retrying the mic
     if (!recognition) initSpeechRecognition();
     if (recognition) {
         try { recognition.start(); }
@@ -650,6 +667,7 @@ function updateMicStatus(status) {
         listening: ['listening', 'Listening…'],
         paused: ['paused', 'Paused'],
         reconnecting: ['reconnecting', 'Reconnecting…'],
+        lost: ['reconnecting', 'Mic stopped — meeting audio still recording'],
         idle: ['', 'Ready']
     };
     const [cls, label] = map[status] || ['', 'Ready'];
@@ -1957,6 +1975,7 @@ async function _startRecordingImpl() {
     if (_ltEl) _ltEl.innerHTML = `<p class="placeholder">${t('transcriptPlaceholder')}</p>`;
     recordingStartTime = Date.now(); pausedDuration = 0; pauseStartTime = null;
     _recordingGen++; failedMeetingChunks = []; updateFailedChunksUI();
+    _speechStartedThisMeeting = false; _micLost = false;
     currentMeetingId = generateUUID();   // draft and saved meeting share one id -> recovery is idempotent
     _draftStartedAt = Date.now();
     clearDraft();
@@ -4201,6 +4220,10 @@ async function loadMeetingHistory() {
 }
 
 async function loadMeetingFromHistory(id) {
+    if (['recording', 'paused', 'stopping', 'processing'].includes(appState)) {
+        showToast('Stop the current recording before opening another meeting.', 'warning');
+        return;
+    }
     try {
         const meeting = await getMeeting(id);
         if (!meeting) { showToast('Meeting not found', 'error'); return; }
