@@ -39,6 +39,14 @@ const _fault = (() => {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Defined here (not in UI helpers): TAB_ID in the drafts section calls it at load time.
+function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+}
+
 async function groqFetch(url, opts) {
     if (_fault.groqFail) {
         return new Response(JSON.stringify({ error: { message: 'Injected failure (?fault=groqfail)' } }), { status: 500 });
@@ -3757,13 +3765,6 @@ function updateKBStats() {
     const kb = getKnowledgeBase();
     const el = document.getElementById('kbStatsText');
     if (el) el.textContent = kb.corrections.length + ' correction' + (kb.corrections.length !== 1 ? 's' : '') + ' learned';
-}
-
-function generateUUID() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-        const r = Math.random() * 16 | 0;
-        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-    });
 }
 
 function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
