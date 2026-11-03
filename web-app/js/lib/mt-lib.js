@@ -1,5 +1,5 @@
 // ============================================================
-// mt-lib — pure helpers shared by app.js (browser: window.MTLib)
+// mt-lib — pure helpers shared by the js/ scripts (browser: window.MTLib)
 // and the Node test suite (module.exports). No DOM access here.
 // ============================================================
 (function (root) {
