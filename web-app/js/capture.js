@@ -78,6 +78,7 @@ function initSpeechRecognition() {
     const sourceLang = appStorage.getItem('source_lang') || 'en-US';
     if (recognition) { try { recognition.abort(); } catch (e) {} recognition = null; }
     recognition = new SpeechRecognition();
+    const rec = recognition;   // handlers ignore events from a replaced instance
     // Bilingual mode: use zh-TW as the primary recognition language.
     // Taiwan meetings are primarily Chinese — the zh-TW model handles English loanwords
     // naturally since Taiwanese speech always mixes them (OK, meeting, report, etc.).
@@ -87,10 +88,11 @@ function initSpeechRecognition() {
     recognition.interimResults = true;
     // In bilingual mode use more alternatives so the recognizer has better candidates for mixed speech
     recognition.maxAlternatives = sourceLang.includes('+') ? 3 : 1;
-    recognition.onstart = () => { _speechStartedThisMeeting = true; _micLost = false; speechActive = true; _lastSpeechResultAt = Date.now(); updateMicStatus('listening'); };
+    recognition.onstart = () => { if (recognition !== rec) return; _speechStartedThisMeeting = true; _micLost = false; speechActive = true; _lastSpeechResultAt = Date.now(); updateMicStatus('listening'); };
     // Finals can arrive just after pause/stop — accept them so the last sentence isn't lost.
-    recognition.onresult = (event) => { if (['recording', 'paused', 'stopping'].includes(appState)) handleSpeechResult(event); };
+    recognition.onresult = (event) => { if (recognition !== rec) return; if (['recording', 'paused', 'stopping'].includes(appState)) handleSpeechResult(event); };
     recognition.onerror = (event) => {
+        if (recognition !== rec) return;
         if (event.error === 'no-speech') return;
         const fatal = ['not-allowed', 'service-not-allowed', 'audio-capture'].includes(event.error);
         if (fatal && (_speechStartedThisMeeting || systemAudioActive) && ['recording', 'paused'].includes(appState)) {
@@ -101,6 +103,11 @@ function initSpeechRecognition() {
             if (!_micLost) showToast('Microphone stopped (' + event.error + '). Recording continues — Pause then Resume to retry the mic, or press Stop & Process.', 'warning');
             _micLost = true;
             updateMicStatus('lost');
+            return;
+        }
+        // Abort-start branches only for a genuine start failure; never mid-stop/process/done.
+        if (fatal && !(appState === 'recording' && !_speechStartedThisMeeting && !systemAudioActive)) {
+            console.warn('[Speech] fatal error ignored in state', appState, event.error);
             return;
         }
         if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
@@ -114,6 +121,7 @@ function initSpeechRecognition() {
         console.warn('[Speech] error:', event.error);
     };
     recognition.onend = () => {
+        if (recognition !== rec) return;
         speechActive = false;
         if (_micLost) { updateMicStatus('lost'); return; }   // no reconnect loop on a dead mic
         updateMicStatus(appState === 'recording' ? 'reconnecting' : 'idle');
@@ -269,7 +277,7 @@ function pauseSpeechRecognition() {
 
 async function resumeSpeechRecognition() {
     speechSentenceBuffer = '';
-    if (_micLost) { _micLost = false; startSpeechWatchdog(); }   // Resume = user retrying the mic
+    _micLost = false; startSpeechWatchdog();   // Resume = user retrying the mic; watchdog stops itself while paused
     if (!recognition) initSpeechRecognition();
     if (recognition) {
         try { recognition.start(); }

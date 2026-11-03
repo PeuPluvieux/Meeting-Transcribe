@@ -149,6 +149,7 @@ function loadSettings() {
 
 // ==================== NEW MEETING ====================
 async function startNewMeeting() {
+    if (appState === 'stopping' || appState === 'processing') { showToast('Wait for the current meeting to finish processing.', 'warning'); return; }
     if (appState === 'recording' || appState === 'paused') {
         if (!confirm(t('newMeetingConfirm'))) return;
         flushSpeechBuffer();

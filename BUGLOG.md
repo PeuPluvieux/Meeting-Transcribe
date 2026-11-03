@@ -1,5 +1,13 @@
 # Bug Log
 
+## v9.10.3 (2026-11-03) — Stop/mic hardening
+| ID | Bug | Root cause | Fix |
+|---|---|---|---|
+| D6b | A late `audio-capture`/`not-allowed` after Stop re-enabled Record mid-processing and the final `done` landed on a new recording | The pre-start fatal-error branch (`setAppState('idle')`) ran in stopping/processing/done states | Abort-start branches run only when recording && speech never started && no system audio; otherwise warn and ignore |
+| D6c | Mic watchdog not running after Resume unless the mic had been lost | Watchdog stops itself while paused and was restarted on resume only when `_micLost` | Resume always resets `_micLost` and restarts the watchdog |
+| D6d | Events from a replaced recognition instance could mutate current state | Handlers did not check which instance fired | Handlers capture `rec` and return if `recognition !== rec` |
+| D6e | New Meeting during stopping/processing replaced `meetingData` mid-summary | `startNewMeeting` lacked the guard History load has | Refuse with a toast while stopping/processing |
+
 ## v9.10.1 (2026-11-03) — Stop greyed out mid-meeting
 | ID | Bug | Root cause | Fix |
 |---|---|---|---|

@@ -59,6 +59,8 @@ const SCRIPTS = scriptList(HTML);
 test('index.html lists at least mt-lib and one app script', () => {
     assert.ok(SCRIPTS.length >= 2, 'expected >= 2 local scripts, got ' + SCRIPTS.length);
     assert.equal(SCRIPTS[0].src, 'js/lib/mt-lib.js');
+    const localTags = [...HTML.matchAll(/<script\b[^>]*\bsrc="([^"]*)"/g)].filter(m => !/^https?:/.test(m[1])).length;
+    assert.equal(localTags, SCRIPTS.length, 'every local <script src> must be picked up by scriptList');
 });
 
 test('every script loads in order without a load-time error', () => {
