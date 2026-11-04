@@ -8,17 +8,21 @@ const GROQ_LIMITS = {
 };
 const QUOTA_KEY = 'groq_quota_state';
 
+const _groqKeyTag = () => MTLib.keyFingerprint(appStorage.getItem('groq_api_key') || '');
 function _loadQuotaState() {
-    try { return JSON.parse(appStorage.getItem(QUOTA_KEY) || 'null'); } catch (e) { return null; }
+    try {
+        const s = JSON.parse(appStorage.getItem(QUOTA_KEY) || 'null');
+        return (s && s.keyTag === _groqKeyTag()) ? s : null;   // state learned under another key is meaningless
+    } catch (e) { return null; }
 }
-const groqQuota = MTQuota.createQuotaTracker({ state: _loadQuotaState() });
+let groqQuota = MTQuota.createQuotaTracker({ state: _loadQuotaState() });
 
 let _quotaSaveTimer = null;
 function saveQuotaState() {
     if (_quotaSaveTimer) return;
     _quotaSaveTimer = setTimeout(() => {
         _quotaSaveTimer = null;
-        try { appStorage.setItem(QUOTA_KEY, JSON.stringify(groqQuota.toJSON())); } catch (e) { /* storage full: keep in memory */ }
+        try { appStorage.setItem(QUOTA_KEY, JSON.stringify({ ...groqQuota.toJSON(), keyTag: _groqKeyTag() })); } catch (e) { /* storage full: keep in memory */ }
     }, 1000);
 }
 
@@ -61,12 +65,19 @@ function groqChatChain() {
 const MODEL_CACHE_KEY = 'groq_models_cache';
 const MODEL_CACHE_MS = 24 * 3600 * 1000;
 
+function resetGroqQuota() {
+    groqQuota = MTQuota.createQuotaTracker({ state: null });
+    appStorage.removeItem(QUOTA_KEY);
+    appStorage.removeItem(MODEL_CACHE_KEY);
+    _groqAvailableIds = null;
+}
+
 async function checkGroqModels({ force = false } = {}) {
     const key = appStorage.getItem('groq_api_key');
     if (!key) return;
     try {
         const c = JSON.parse(appStorage.getItem(MODEL_CACHE_KEY) || 'null');
-        if (!force && c && Array.isArray(c.ids) && c.ids.length && Date.now() - c.at < MODEL_CACHE_MS) { _groqAvailableIds = c.ids; return; }
+        if (!force && c && c.keyTag === _groqKeyTag() && Array.isArray(c.ids) && c.ids.length && Date.now() - c.at < MODEL_CACHE_MS) { _groqAvailableIds = c.ids; return; }
     } catch (e) { /* bad cache → refetch */ }
     if (DEV_PARAMS.has('fault')) return;
     try {
@@ -78,7 +89,7 @@ async function checkGroqModels({ force = false } = {}) {
         const ids = (data.data || []).map(m => m && m.id).filter(Boolean);
         if (!ids.length) return;
         _groqAvailableIds = ids;
-        appStorage.setItem(MODEL_CACHE_KEY, JSON.stringify({ at: Date.now(), ids }));
+        appStorage.setItem(MODEL_CACHE_KEY, JSON.stringify({ at: Date.now(), ids, keyTag: _groqKeyTag() }));
         const missing = [...MODELS.groqWhisperLive, ...MODELS.groqChat.map(m => m.id)].filter(id => !ids.includes(id));
         if (missing.length) console.warn('[Groq] configured models not offered by this key, skipping:', missing);
     } catch (e) { /* offline or blocked: keep the configured chain */ }

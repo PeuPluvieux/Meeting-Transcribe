@@ -154,3 +154,14 @@ test('rebuildFullTranscript joins corrected-or-original text', () => {
     assert.equal(MTLib.rebuildFullTranscript(tr), 'hello world ');
     assert.equal(MTLib.rebuildFullTranscript([]), '');
 });
+
+test('keyFingerprint: deterministic, distinct, empty-safe, never leaks input', () => {
+    const MT = require('../web-app/js/lib/mt-lib.js');
+    const k = 'gsk_secretvalue123';
+    assert.equal(MT.keyFingerprint(k), MT.keyFingerprint(k));
+    assert.notEqual(MT.keyFingerprint('a'), MT.keyFingerprint('b'));
+    assert.equal(MT.keyFingerprint(''), '');
+    assert.equal(MT.keyFingerprint(null), '');
+    assert.match(MT.keyFingerprint(k), /^[0-9a-f]{8}$/);
+    assert.ok(!MT.keyFingerprint(k).includes(k));
+});

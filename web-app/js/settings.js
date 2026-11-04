@@ -70,8 +70,13 @@ function saveSettings() {
     appStorage.setItem('filler_filter_enabled', document.getElementById('fillerFilterEnabled')?.checked ? 'true' : 'false');
     appStorage.setItem('translation_provider', document.getElementById('translationProvider')?.value || 'google');
     const groqKey = document.getElementById('groqApiKey')?.value || '';
+    const prevGroqKey = appStorage.getItem('groq_api_key') || '';
     if (groqKey) appStorage.setItem('groq_api_key', groqKey);
     else appStorage.removeItem('groq_api_key');
+    if (groqKey !== prevGroqKey) {   // quota/model cache belong to the old key
+        resetGroqQuota();
+        checkGroqModels({ force: true });
+    }
     const gladiaKey = document.getElementById('gladiaApiKey')?.value || '';
     if (gladiaKey) appStorage.setItem('gladia_api_key', gladiaKey);
     else appStorage.removeItem('gladia_api_key');

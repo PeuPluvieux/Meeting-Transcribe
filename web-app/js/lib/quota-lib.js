@@ -8,14 +8,14 @@
     const HOUR_MS = 3600000, DAY_MS = 86400000;
 
     function createQuotaTracker({ now = () => Date.now(), state = null } = {}) {
-        const models = (state && typeof state === 'object' && state.models && typeof state.models === 'object') ? state.models : {};
+        const models = (state && typeof state === 'object' && state.models && typeof state.models === 'object' && !Array.isArray(state.models)) ? state.models : {};
         for (const id of Object.keys(models)) {        // saved state comes from localStorage: sanitise it
             const e = models[id];
             if (!e || typeof e !== 'object') { delete models[id]; continue; }
             e.audio = Array.isArray(e.audio)
-                ? e.audio.filter(a => Array.isArray(a) && Number.isFinite(a[0]) && Number.isFinite(a[1]))
+                ? e.audio.filter(a => Array.isArray(a) && Number.isFinite(a[0]) && Number.isFinite(a[1]) && a[0] <= now())
                 : [];
-            for (const k of ['coolUntil', 'reqResetAt', 'tokResetAt']) if (!Number.isFinite(e[k])) e[k] = 0;
+            for (const k of ['coolUntil', 'reqResetAt', 'tokResetAt']) e[k] = Number.isFinite(e[k]) ? Math.min(e[k], now() + DAY_MS) : 0;
             for (const k of ['reqRemaining', 'tokRemaining']) if (!Number.isFinite(e[k])) e[k] = null;
             if (!Number.isFinite(e.strikes)) e.strikes = 0;
         }

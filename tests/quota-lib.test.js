@@ -163,3 +163,15 @@ test('429 backoff is capped at 60 s', () => {
     for (let i = 0; i < 12; i++) q.noteResponse('m', 429, H());
     assert.equal(q.waitMs('m'), 60000);
 });
+
+test('sanitiser clamps far-future timestamps and drops future audio; array models tolerated', () => {
+    const c = clock();
+    const DAY = 86400000;
+    const q = Q.createQuotaTracker({ now: c.now, state: { models: { m: {
+        coolUntil: c.t + 10 * DAY, reqResetAt: c.t + 10 * DAY, tokResetAt: c.t + 10 * DAY,
+        reqRemaining: 0, tokRemaining: 0, strikes: 1,
+        audio: [[c.t + 5000, 100], [c.t - 1000, 50]] } } } });
+    assert.ok(q.waitMs('m', { tokens: 10 }) <= DAY);
+    assert.equal(q.audioUsedSeconds(['m']), 50);
+    assert.doesNotThrow(() => Q.createQuotaTracker({ now: c.now, state: { models: [] } }).waitMs('x'));
+});
