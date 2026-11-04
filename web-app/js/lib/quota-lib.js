@@ -12,9 +12,11 @@
         for (const id of Object.keys(models)) {        // saved state comes from localStorage: sanitise it
             const e = models[id];
             if (!e || typeof e !== 'object') { delete models[id]; continue; }
-            if (!Array.isArray(e.audio)) e.audio = [];
-            for (const k of ['coolUntil', 'reqResetAt', 'tokResetAt']) if (typeof e[k] !== 'number') e[k] = 0;
-            for (const k of ['reqRemaining', 'tokRemaining']) if (typeof e[k] !== 'number') e[k] = null;
+            e.audio = Array.isArray(e.audio)
+                ? e.audio.filter(a => Array.isArray(a) && Number.isFinite(a[0]) && Number.isFinite(a[1]))
+                : [];
+            for (const k of ['coolUntil', 'reqResetAt', 'tokResetAt']) if (!Number.isFinite(e[k])) e[k] = 0;
+            for (const k of ['reqRemaining', 'tokRemaining']) if (!Number.isFinite(e[k])) e[k] = null;
         }
         const entry = id => (models[id] ||= { coolUntil: 0, reqRemaining: null, reqResetAt: 0, tokRemaining: null, tokResetAt: 0, audio: [] });
         const billed = (lim, seconds) => Math.max(seconds || 0, (lim && lim.minBilledSeconds) || 0);

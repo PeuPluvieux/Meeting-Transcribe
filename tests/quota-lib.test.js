@@ -102,6 +102,17 @@ test('malformed saved state is tolerated', () => {
     assert.equal(q.waitMs('x'), 0);
     assert.equal(q.audioUsedSeconds(['y']), 0);
     assert.doesNotThrow(() => Q.createQuotaTracker({ state: 'garbage' }));
+    // corrupt audio entries and non-finite numbers must not throw on the send path
+    const bad = Q.createQuotaTracker({ now: clock().now, state: { models: {
+        w: { audio: [null, 5, ['x', 1], [1e12, 20]], coolUntil: NaN, reqRemaining: NaN, reqResetAt: NaN },
+        z: { audio: [5] },
+    } } });
+    assert.doesNotThrow(() => bad.waitMs('w', { audioSeconds: 12 }, { ash: 7200 }));
+    assert.equal(bad.waitMs('w', { audioSeconds: 12 }, { ash: 7200 }), 0);
+    assert.equal(bad.waitMs('w'), 0);
+    assert.equal(bad.audioUsedSeconds(['w']), 20);
+    assert.doesNotThrow(() => bad.waitMs('z', { audioSeconds: 12 }, { ash: 7200 }));
+    assert.equal(bad.audioUsedSeconds(['z']), 0);
 });
 
 test('estimateChatTokens: CJK ~1 token per char, Latin ~4 chars per token, plus maxTokens', () => {
