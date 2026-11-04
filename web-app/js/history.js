@@ -72,6 +72,7 @@ async function loadMeetingFromHistory(id) {
         const meeting = await getMeeting(id);
         if (!meeting) { showToast('Meeting not found', 'error'); return; }
         currentMeetingId = id;
+        currentSegmentId = (meeting.transcript || []).reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
         meetingData = {
             transcript: meeting.transcript || [],
             bookmarks: meeting.bookmarks || [],
@@ -96,32 +97,35 @@ async function loadMeetingFromHistory(id) {
     }
 }
 
-async function saveCurrentMeeting({ silent = false } = {}) {
-    if (!meetingData.transcript.length) { if (!silent) showToast('No transcript to save', 'warning'); return false; }
-    const id = currentMeetingId || generateUUID();
+async function saveCurrentMeeting({ silent = false, allowEmpty = false } = {}) {
+    if (!meetingData.transcript.length && !allowEmpty) { if (!silent) showToast('No transcript to save', 'warning'); return false; }
+    // Snapshot before any await: a concurrent meeting switch must not leak into this record.
+    const snap = { ...meetingData };
+    const snapMeetingId = currentMeetingId;
+    const id = snapMeetingId || generateUUID();
     const duration = document.getElementById('timer').textContent;
     let title = 'Meeting ' + new Date().toLocaleDateString();
-    if (meetingData.summary && meetingData.summaryStatus !== 'failed') title = meetingData.summary.split('.')[0].slice(0, 60);
-    else if (meetingData.fullTranscript) title = meetingData.fullTranscript.slice(0, 60);
+    if (snap.summary && snap.summaryStatus !== 'failed') title = snap.summary.split('.')[0].slice(0, 60);
+    else if (snap.fullTranscript) title = snap.fullTranscript.slice(0, 60);
 
     let savedTimestamp = Date.now();
-    if (currentMeetingId) {
+    if (snapMeetingId) {
         try { const existing = await getMeeting(id); if (existing?.timestamp) savedTimestamp = existing.timestamp; } catch (e) { /* ignore */ }
     }
 
     const meeting = { id, title, timestamp: savedTimestamp, duration,
-        transcript: meetingData.transcript, bookmarks: meetingData.bookmarks || [],
-        fullTranscript: meetingData.fullTranscript,
-        summary: meetingData.summary, keyPoints: meetingData.keyPoints,
-        keyDecisions: meetingData.keyDecisions, actionItems: meetingData.actionItems,
-        actionItemsChecked: meetingData.actionItemsChecked || [],
-        nextSteps: meetingData.nextSteps,
-        summaryStatus: meetingData.summaryStatus || 'done',
-        summaryError: meetingData.summaryError || null
+        transcript: snap.transcript, bookmarks: snap.bookmarks || [],
+        fullTranscript: snap.fullTranscript,
+        summary: snap.summary, keyPoints: snap.keyPoints,
+        keyDecisions: snap.keyDecisions, actionItems: snap.actionItems,
+        actionItemsChecked: snap.actionItemsChecked || [],
+        nextSteps: snap.nextSteps,
+        summaryStatus: snap.summaryStatus || 'done',
+        summaryError: snap.summaryError || null
     };
     try {
         await saveMeeting(meeting);
-        currentMeetingId = id;
+        if (!snapMeetingId && !currentMeetingId) currentMeetingId = id;
         if (!silent) showToast('Meeting saved!', 'success');
         autoCleanupMeetings();
         return true;

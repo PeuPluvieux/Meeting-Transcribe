@@ -140,14 +140,22 @@ async function retryQueuedChunksForCurrent() {
         if (done.length) {
             const live = currentMeetingId === meetingId && ['idle', 'done'].includes(appState);
             if (live) {
+                let nextId = meetingData.transcript.reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
+                const newIds = new Set();
                 for (const r of results) {
-                    const { seg } = buildSegment(r.text, 'meeting', r.item.startSeconds, currentSegmentId++);
+                    const { seg } = buildSegment(r.text, 'meeting', r.item.startSeconds, nextId++);
                     seg.translated = r.translated;
+                    newIds.add(seg.id);
                     MTLib.insertSegmentSorted(meetingData.transcript, seg);
                 }
+                currentSegmentId = Math.max(currentSegmentId, nextId);
                 meetingData.fullTranscript = MTLib.rebuildFullTranscript(meetingData.transcript);
-                const saved = await saveCurrentMeeting({ silent: true });
-                if (!saved) { abort = true; return; }   // saveCurrentMeeting already toasted; queue kept
+                const saved = await saveCurrentMeeting({ silent: true, allowEmpty: true });
+                if (!saved) {   // roll the in-memory insert back so a later Retry does not duplicate it
+                    meetingData.transcript = meetingData.transcript.filter(s => !newIds.has(s.id));
+                    meetingData.fullTranscript = MTLib.rebuildFullTranscript(meetingData.transcript);
+                    abort = true; return;
+                }   // saveCurrentMeeting already toasted; queue kept
             } else {
                 const meeting = await getMeeting(meetingId);
                 if (!meeting) { showToast(t('missingAudioNoMeeting'), 'warning'); abort = true; return; }

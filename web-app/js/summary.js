@@ -1,6 +1,17 @@
 // ==================== PROCESSING ====================
 async function processRecording() {
     if (!meetingData.transcript.length) {
+        // Audio that was all queued for retry must not be stranded: save an empty pending meeting.
+        let queued = 0;
+        try { queued = currentMeetingId ? (await getQueuedChunks(currentMeetingId)).length : 0; } catch (e) { /* treat as none */ }
+        if (queued) {
+            meetingData.summaryStatus = 'pending';
+            meetingData.summaryError = null;
+            if (await saveCurrentMeeting({ silent: true, allowEmpty: true })) clearDraft();
+            showProcessingOverlay(false);
+            displayResults();
+            return;
+        }
         showToast('No transcript recorded.', 'warning');
         clearDraft();
         showProcessingOverlay(false);
