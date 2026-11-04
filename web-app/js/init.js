@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.info(`[Meeting Notes AI] v${APP_VERSION}${IS_BETA ? ' (beta)' : ''}`);
     loadMeetingTitle();
     loadSettings();
+    checkGroqModels(); // async, non-blocking; cached 24 h
     initSpeakers();
     setAppState('idle');
     checkDraftRecovery();

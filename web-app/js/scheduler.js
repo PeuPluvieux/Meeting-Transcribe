@@ -54,3 +54,54 @@ function groqChatChain() {
     const ids = groqModelChain(MODELS.groqChat.map(m => m.id));
     return MODELS.groqChat.filter(m => ids.includes(m.id));
 }
+
+// ==================== MODEL-ID BOOT CHECK ====================
+// Cached 24 h. Configured IDs the key's /models list doesn't offer are skipped (prevents another
+// retired-model outage). Plain fetch, not groqFetch: ?fault counters must only hit the calls under test.
+const MODEL_CACHE_KEY = 'groq_models_cache';
+const MODEL_CACHE_MS = 24 * 3600 * 1000;
+
+async function checkGroqModels({ force = false } = {}) {
+    const key = appStorage.getItem('groq_api_key');
+    if (!key) return;
+    try {
+        const c = JSON.parse(appStorage.getItem(MODEL_CACHE_KEY) || 'null');
+        if (!force && c && Array.isArray(c.ids) && c.ids.length && Date.now() - c.at < MODEL_CACHE_MS) { _groqAvailableIds = c.ids; return; }
+    } catch (e) { /* bad cache → refetch */ }
+    if (DEV_PARAMS.has('fault')) return;
+    try {
+        const resp = await fetch('https://api.groq.com/openai/v1/models', {
+            headers: { 'Authorization': 'Bearer ' + key }, signal: AbortSignal.timeout(10000)
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const ids = (data.data || []).map(m => m && m.id).filter(Boolean);
+        if (!ids.length) return;
+        _groqAvailableIds = ids;
+        appStorage.setItem(MODEL_CACHE_KEY, JSON.stringify({ at: Date.now(), ids }));
+        const missing = [...MODELS.groqWhisperLive, ...MODELS.groqChat.map(m => m.id)].filter(id => !ids.includes(id));
+        if (missing.length) console.warn('[Groq] configured models not offered by this key, skipping:', missing);
+    } catch (e) { /* offline or blocked: keep the configured chain */ }
+}
+
+// ==================== SINGLE RECORDER PER BROWSER ====================
+// Two tabs recording at once would double-spend one Groq key. Held from Start until idle/done;
+// the browser frees it automatically if the tab closes or crashes.
+const RECORDER_LOCK = 'meeting-transcribe-recorder';
+let _recorderLockRelease = null;
+
+function acquireRecorderLock() {
+    if (_recorderLockRelease) return Promise.resolve(true);
+    if (!navigator.locks?.request) return Promise.resolve(true);
+    return new Promise(resolve => {
+        navigator.locks.request(RECORDER_LOCK, { ifAvailable: true }, lock => {
+            if (!lock) { resolve(false); return; }
+            resolve(true);
+            return new Promise(release => { _recorderLockRelease = release; });
+        }).catch(() => resolve(true)); // locks unavailable (e.g. opaque origin): don't block recording
+    });
+}
+
+function releaseRecorderLock() {
+    if (_recorderLockRelease) { const r = _recorderLockRelease; _recorderLockRelease = null; r(); }
+}

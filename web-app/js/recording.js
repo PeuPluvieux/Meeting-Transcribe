@@ -470,6 +470,7 @@ async function _startRecordingImpl() {
     clearLiveTranscript();
     const _ltEl = document.getElementById('liveTranscript');
     if (_ltEl) _ltEl.innerHTML = `<p class="placeholder">${t('transcriptPlaceholder')}</p>`;
+    if (!(await acquireRecorderLock())) { showToast(t('otherTabRecording'), 'warning'); return; }
     recordingStartTime = Date.now(); pausedDuration = 0; pauseStartTime = null;
     _recordingGen++; failedMeetingChunks = []; updateFailedChunksUI();
     _speechStartedThisMeeting = false; _micLost = false;

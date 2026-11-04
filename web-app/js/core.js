@@ -113,6 +113,7 @@ let appState = 'idle';
 function getAppState() { return appState; }
 function setAppState(newState) {
     appState = newState;
+    if (newState === 'idle' || newState === 'done') releaseRecorderLock(); // defined in scheduler.js (call time)
     updateRecordingUI();
 }
 
