@@ -99,23 +99,13 @@ let currentMeetingId = null;
 
 const _normalizeForDedup = s => s.trim().replace(/[.!?。？！…,，、]+$/, '').replace(/\s+/g, ' ').toLowerCase();
 
-function addTranscriptSegment(text, source = 'mic', { startSeconds } = {}) {
-    if (!text.trim()) return;
-    // 'stopping' must stay open: the final mic sentence and last meeting-audio chunk land here.
-    if (appState === 'processing' || appState === 'idle' || appState === 'done') return;
-    // Deduplication: skip if same text (modulo trailing punctuation) was just added within 3s.
-    // Catches: flush fires then final arrives with slight punctuation difference.
-    const now = Date.now();
-    if (_normalizeForDedup(text) === _normalizeForDedup(_lastAddedText) && now - _lastAddedAt < 3000) return;
-    _lastAddedText = text.trim();
-    _lastAddedAt = now;
+// Shared by live segments and by audio recovered later from the chunk queue.
+function buildSegment(text, source, elapsed, id) {
     const corrected = applyKnowledgeBase(text);
     const filtered = filterFillerWords(corrected || text);
-    const elapsed = Number.isFinite(startSeconds) ? startSeconds : getElapsedSeconds();
     const displayText = filtered || corrected || text;
-
     const seg = {
-        id: currentSegmentId++,
+        id,
         timestamp: formatTime(elapsed),
         startSeconds: elapsed,
         original: text,
@@ -126,13 +116,27 @@ function addTranscriptSegment(text, source = 'mic', { startSeconds } = {}) {
         speaker: null,
         source
     };
-
     // Per-segment language detection for bilingual mode
-    const globalSrcLang = appStorage.getItem('source_lang') || 'en-US';
-    if (globalSrcLang.includes('+')) {
+    if ((appStorage.getItem('source_lang') || 'en-US').includes('+')) {
         seg.language = detectTextLanguage(displayText);
         seg.languageFlag = seg.language === 'zh' ? '🇹🇼' : '🇺🇸';
     }
+    return { seg, displayText };
+}
+
+function addTranscriptSegment(text, source = 'mic', { startSeconds } = {}) {
+    if (!text.trim()) return;
+    // 'stopping' must stay open: the final mic sentence and last meeting-audio chunk land here.
+    if (appState === 'processing' || appState === 'idle' || appState === 'done') return;
+    // Deduplication: skip if same text (modulo trailing punctuation) was just added within 3s.
+    // Catches: flush fires then final arrives with slight punctuation difference.
+    const now = Date.now();
+    if (_normalizeForDedup(text) === _normalizeForDedup(_lastAddedText) && now - _lastAddedAt < 3000) return;
+    _lastAddedText = text.trim();
+    _lastAddedAt = now;
+    const elapsed = Number.isFinite(startSeconds) ? startSeconds : getElapsedSeconds();
+    const { seg, displayText } = buildSegment(text, source, elapsed, currentSegmentId++);
+    const globalSrcLang = appStorage.getItem('source_lang') || 'en-US';
 
     meetingData.transcript.push(seg);
     meetingData.fullTranscript += displayText + ' ';
@@ -480,6 +484,7 @@ async function _startRecordingImpl() {
     clearDraft();
     startDraftHeartbeat();
     setAppState('recording');
+    refreshMissingAudioBanner(); // hide the previous meeting's banner
     startTimer();
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'inline-flex';
@@ -544,16 +549,20 @@ async function stopRecording() {
         showProcessingOverlay(true, t('finishingAudio'));
         await stopSystemAudioCapture({ flush: true });   // D3: last chunk is transcribed, not dropped
         await settleMeetingJobs(30000);              // wait for in-flight chunks (bounded)
-        let lost = 0;
+        let toQueue = [];
         if (failedMeetingChunks.length) {
             const undone = new Set();                // chunks the retry hasn't finished (read after a timeout)
             await Promise.race([retryFailedChunks({ quiet: true, deadlineMs: 30000, undone }), sleep(30000)]);
-            lost += undone.size;                     // in-flight or unattempted when the race timed out
+            toQueue.push(...undone);                 // in-flight or unattempted when the race timed out
             undone.clear();                          // the abandoned retry must not re-queue them later
         }
-        lost += pendingMeetingJobs.size + failedMeetingChunks.length;  // counted after the race: no double counting
-        if (lost) showToast(t('chunksLostOnStop').replace('{n}', lost), 'warning');
+        toQueue.push(...failedMeetingChunks);
         failedMeetingChunks = [];
+        toQueue = [...new Set(toQueue)].filter(c => c.gen === _recordingGen);
+        const queued = await queueChunks(currentMeetingId, toQueue);   // kept for "Retry Missing Audio"
+        const lost = pendingMeetingJobs.size + (toQueue.length - queued); // in-flight jobs hold no reachable blob
+        if (queued) showToast(t('chunksQueuedOnStop').replace('{n}', queued), 'warning');
+        if (lost) showToast(t('chunksLostOnStop').replace('{n}', lost), 'warning');
         await sleep(500);                            // last Web Speech final result
         const badge = document.getElementById('micBadge');
         if (badge) badge.style.display = 'none';

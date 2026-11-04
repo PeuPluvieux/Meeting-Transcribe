@@ -132,3 +132,25 @@ test('retryHintFromMessage parses Groq 429 body hints', () => {
     assert.equal(MTLib.retryHintFromMessage(null), null);
     assert.equal(MTLib.retryHintFromMessage(undefined), null);
 });
+
+test('insertSegmentSorted places a segment by startSeconds, after equal times', () => {
+    const tr = [{ id: 0, startSeconds: 0 }, { id: 1, startSeconds: 24 }, { id: 2, startSeconds: 36 }];
+    MTLib.insertSegmentSorted(tr, { id: 9, startSeconds: 12 });
+    assert.deepEqual(tr.map(s => s.id), [0, 9, 1, 2]);
+    MTLib.insertSegmentSorted(tr, { id: 10, startSeconds: 24 });
+    assert.deepEqual(tr.map(s => s.id), [0, 9, 1, 10, 2]);
+    MTLib.insertSegmentSorted(tr, { id: 11, startSeconds: 99 });
+    assert.equal(tr.at(-1).id, 11);
+});
+
+test('insertSegmentSorted ignores segments without startSeconds when choosing a slot', () => {
+    const tr = [{ id: 0 }, { id: 1, startSeconds: 30 }];
+    MTLib.insertSegmentSorted(tr, { id: 2, startSeconds: 10 });
+    assert.deepEqual(tr.map(s => s.id), [0, 2, 1]);
+});
+
+test('rebuildFullTranscript joins corrected-or-original text', () => {
+    const tr = [{ original: 'um hello', corrected: 'hello' }, { original: 'world', corrected: null }, { original: '' }];
+    assert.equal(MTLib.rebuildFullTranscript(tr), 'hello world ');
+    assert.equal(MTLib.rebuildFullTranscript([]), '');
+});

@@ -147,6 +147,7 @@ async function confirmDeleteMeeting(id) {
     if (!confirm('Delete this meeting? This cannot be undone.')) return;
     try {
         await deleteMeeting(id);
+        removeQueuedChunksForMeeting(id); // async; orphans are also purged after 7 days
         if (currentMeetingId === id) currentMeetingId = null;
         loadMeetingHistory();
         showToast('Meeting deleted', 'success');

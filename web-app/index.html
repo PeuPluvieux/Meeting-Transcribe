@@ -448,6 +448,11 @@
                         <button class="btn btn-small btn-ghost" onclick="resetMiTACGptUrl()" title="Change MiTAC GPT URL">✏</button>
                     </div>
                 </div>
+                <div class="missing-audio-banner" id="missingAudioBanner" style="display:none">
+                    <span id="missingAudioText"></span>
+                    <button class="btn btn-small btn-primary" id="missingAudioRetryBtn" onclick="retryQueuedChunksForCurrent()"></button>
+                    <button class="btn btn-small btn-ghost" id="missingAudioDiscardBtn" onclick="discardQueuedChunksForCurrent()"></button>
+                </div>
                 <div class="content-body" id="transcriptContent"></div>
             </div>
             <div class="tab-content" id="summaryTab" style="display:none;">
@@ -614,6 +619,7 @@
     <script src="js/knowledge.js?v=9.10.3" defer></script>
     <script src="js/speakers-editing.js?v=9.10.3" defer></script>
     <script src="js/history.js?v=9.10.3" defer></script>
+    <script src="js/chunk-queue.js?v=9.10.3" defer></script>
     <script src="js/init.js?v=9.10.3" defer></script>
 </body>
 </html>

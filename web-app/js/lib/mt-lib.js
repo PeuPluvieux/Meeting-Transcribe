@@ -108,7 +108,21 @@
         return now - d.updatedAt > staleMs;
     }
 
-    const api = { namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, retryHintFromMessage, parseJsonLoose, groupForMerge, isRetryableGroq400, DRAFT_VERSION, buildDraft, isRecoverableDraft };
+    // ==================== TRANSCRIPT EDITS ====================
+    // Insert a late (recovered) segment in time order; equal times go after existing ones.
+    function insertSegmentSorted(transcript, seg) {
+        const i = transcript.findIndex(s => Number.isFinite(s && s.startSeconds) && s.startSeconds > seg.startSeconds);
+        if (i === -1) transcript.push(seg); else transcript.splice(i, 0, seg);
+        return transcript;
+    }
+
+    // Same text addTranscriptSegment appends to fullTranscript (corrected wins over original).
+    function rebuildFullTranscript(transcript) {
+        const parts = transcript.map(s => (s && (s.corrected || s.original)) || '').filter(Boolean);
+        return parts.length ? parts.join(' ') + ' ' : '';
+    }
+
+    const api = { namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, retryHintFromMessage, parseJsonLoose, groupForMerge, isRetryableGroq400, DRAFT_VERSION, buildDraft, isRecoverableDraft, insertSegmentSorted, rebuildFullTranscript };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTLib = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

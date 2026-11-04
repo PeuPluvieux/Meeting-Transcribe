@@ -105,6 +105,7 @@ function displayResults() {
         retryBtn.textContent = st === 'pending' ? t('runSummary') : t('retrySummary');
     }
     document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
+    refreshMissingAudioBanner();
 }
 
 function _bookmarkMarkerHTML(bk) {

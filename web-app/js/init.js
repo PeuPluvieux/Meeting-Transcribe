@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadMeetingTitle();
     loadSettings();
     checkGroqModels(); // async, non-blocking; cached 24 h
+    purgeOldQueuedChunks(); // async, non-blocking
     initSpeakers();
     setAppState('idle');
     checkDraftRecovery();
