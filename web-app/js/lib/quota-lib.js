@@ -17,8 +17,9 @@
                 : [];
             for (const k of ['coolUntil', 'reqResetAt', 'tokResetAt']) if (!Number.isFinite(e[k])) e[k] = 0;
             for (const k of ['reqRemaining', 'tokRemaining']) if (!Number.isFinite(e[k])) e[k] = null;
+            if (!Number.isFinite(e.strikes)) e.strikes = 0;
         }
-        const entry = id => (models[id] ||= { coolUntil: 0, reqRemaining: null, reqResetAt: 0, tokRemaining: null, tokResetAt: 0, audio: [] });
+        const entry = id => (models[id] ||= { coolUntil: 0, reqRemaining: null, reqResetAt: 0, tokRemaining: null, tokResetAt: 0, strikes: 0, audio: [] });
         const billed = (lim, seconds) => Math.max(seconds || 0, (lim && lim.minBilledSeconds) || 0);
 
         function prune(e) {
@@ -44,7 +45,7 @@
             return Infinity; // the request alone is bigger than the window's budget
         }
 
-        function noteResponse(id, status, getHeader) {
+        function noteResponse(id, status, getHeader, { retryHintMs = null } = {}) {
             const e = entry(id), t = now();
             const num = h => {
                 const v = getHeader(h);
@@ -56,7 +57,16 @@
             if (rr !== null) { e.reqRemaining = rr; e.reqResetAt = t + (MT.parseDurationMs(getHeader('x-ratelimit-reset-requests')) ?? 0); }
             const rt = num('x-ratelimit-remaining-tokens');
             if (rt !== null) { e.tokRemaining = rt; e.tokResetAt = t + (MT.parseDurationMs(getHeader('x-ratelimit-reset-tokens')) ?? 0); }
-            if (status === 429) e.coolUntil = Math.max(e.coolUntil, t + MT.retryDelayMs(getHeader, 0, { capMs: DAY_MS }));
+            if (status === 429) {
+                e.strikes = (e.strikes || 0) + 1;
+                const fromHeader = MT.parseDurationMs(getHeader('retry-after'))
+                    ?? MT.parseDurationMs(getHeader('x-ratelimit-reset-requests'))
+                    ?? MT.parseDurationMs(getHeader('x-ratelimit-reset-tokens'));
+                const cool = fromHeader !== null ? fromHeader + 250
+                    : Number.isFinite(retryHintMs) ? retryHintMs + 250
+                    : Math.min(1000 * Math.pow(2, e.strikes - 1), 60000);
+                e.coolUntil = Math.max(e.coolUntil, t + Math.min(Math.max(cool, 0), DAY_MS));
+            } else if (status >= 200 && status < 300) e.strikes = 0;
         }
 
         function noteSend(id, { tokens = 0 } = {}) {

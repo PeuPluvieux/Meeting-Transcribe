@@ -123,3 +123,12 @@ test('isRetryableGroq400 recognises JSON-mode failures only', () => {
     assert.equal(MTLib.isRetryableGroq400(500, { error: { code: 'json_validate_failed' } }), false);
     assert.equal(MTLib.isRetryableGroq400(400, null), false);
 });
+
+test('retryHintFromMessage parses Groq 429 body hints', () => {
+    assert.equal(MTLib.retryHintFromMessage('Rate limit reached. Please try again in 3m2.5s. Need more tokens?'), 182500);
+    assert.equal(MTLib.retryHintFromMessage('try again in 7.66s'), 7660);
+    assert.equal(MTLib.retryHintFromMessage('try again in 350ms'), 350);
+    assert.equal(MTLib.retryHintFromMessage('no hint here'), null);
+    assert.equal(MTLib.retryHintFromMessage(null), null);
+    assert.equal(MTLib.retryHintFromMessage(undefined), null);
+});

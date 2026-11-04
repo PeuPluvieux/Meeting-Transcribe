@@ -507,15 +507,17 @@ async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AU
                     signal: AbortSignal.timeout(30000)
                 });
             } catch (e) { lastErr = e; await sleep(1000 * (attempt + 1)); continue; } // network/timeout
-            groqQuota.noteResponse(model, resp.status, h => resp.headers.get(h));
             if (resp.ok) {
+                groqQuota.noteResponse(model, resp.status, h => resp.headers.get(h));
                 groqQuota.noteAudio(model, audioSeconds, GROQ_LIMITS.whisper);
                 saveQuotaState();
                 const data = await resp.json();
                 return data.text?.trim() || '';
             }
-            saveQuotaState();
             const err = await resp.json().catch(() => ({}));
+            groqQuota.noteResponse(model, resp.status, h => resp.headers.get(h),
+                resp.status === 429 ? { retryHintMs: MTLib.retryHintFromMessage(err.error?.message) } : {});
+            saveQuotaState();
             lastErr = new Error(`${err.error?.message || 'Transcription failed'} (HTTP ${resp.status})`);
             if (resp.status === 429) continue; // the next waitMs() check applies retry-after (or moves to the next model)
             if (resp.status >= 500) { await sleep(1000 * (attempt + 1)); continue; }

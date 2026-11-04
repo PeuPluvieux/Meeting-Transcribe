@@ -54,6 +54,13 @@
         return Math.min(Math.max(ms, 0), capMs);
     }
 
+    // Groq's CORS policy hides retry-after/x-ratelimit-* from browsers, but the 429 body says
+    // "... Please try again in 3m2.5s." — recover the wait from that message. null = no hint.
+    function retryHintFromMessage(msg) {
+        const m = /try again ins+([0-9hms.]+)/i.exec(String(msg ?? ''));
+        return m ? parseDurationMs(m[1]) : null;
+    }
+
     // ==================== LLM OUTPUT ====================
     function parseJsonLoose(raw) {
         const text = String(raw ?? '');
@@ -101,7 +108,7 @@
         return now - d.updatedAt > staleMs;
     }
 
-    const api = { namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, parseJsonLoose, groupForMerge, isRetryableGroq400, DRAFT_VERSION, buildDraft, isRecoverableDraft };
+    const api = { namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, retryHintFromMessage, parseJsonLoose, groupForMerge, isRetryableGroq400, DRAFT_VERSION, buildDraft, isRecoverableDraft };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTLib = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -432,14 +432,16 @@ async function groqChat({ messages, maxTokens = 2048, json = false, temperature 
                     lastErr = (e.name === 'TimeoutError' || e.name === 'AbortError') ? new Error('Groq request timed out') : e;
                     continue;
                 }
-                groqQuota.noteResponse(model.id, resp.status, h => resp.headers.get(h));
+                let err = null;
+                if (!resp.ok) err = await resp.json().catch(() => ({}));
+                groqQuota.noteResponse(model.id, resp.status, h => resp.headers.get(h),
+                    resp.status === 429 ? { retryHintMs: MTLib.retryHintFromMessage(err?.error?.message) } : {});
                 saveQuotaState();
                 if (resp.status === 429) {
                     lastErr = new GroqLimitError(model.id, groqQuota.waitMs(model.id, { tokens }));
                     continue; // the next waitMs() check applies retry-after (or moves to the next model)
                 }
                 if (!resp.ok) {
-                    const err = await resp.json().catch(() => ({}));
                     lastErr = new Error(`${err.error?.message || 'Groq request failed'} (HTTP ${resp.status})`);
                     if (resp.status >= 500) { await sleep(1000 * (attempt + 1)); continue; }
                     if (resp.status === 404 || (resp.status === 400 && /model|decommission/i.test(lastErr.message))) break;

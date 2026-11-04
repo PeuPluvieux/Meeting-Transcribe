@@ -127,3 +127,39 @@ test('filterAvailableModels keeps order, ignores unknown lists, never returns em
     assert.deepEqual(Q.filterAvailableModels(['a', 'b'], []), ['a', 'b']);
     assert.deepEqual(Q.filterAvailableModels(['a', 'b'], ['z']), ['a', 'b']);
 });
+
+test('429 body hint is used when headers are hidden', () => {
+    const q = Q.createQuotaTracker({ now: clock().now });
+    q.noteResponse('m', 429, H(), { retryHintMs: 60000 });
+    assert.equal(q.waitMs('m'), 60250);
+});
+
+test('429 header wins over the body hint', () => {
+    const q = Q.createQuotaTracker({ now: clock().now });
+    q.noteResponse('m', 429, H({ 'retry-after': '30' }), { retryHintMs: 60000 });
+    assert.equal(q.waitMs('m'), 30250);
+});
+
+test('429 backoff doubles without headers or hint', () => {
+    const q = Q.createQuotaTracker({ now: clock().now });
+    for (const want of [1000, 2000, 4000]) {
+        q.noteResponse('m', 429, H());
+        assert.equal(q.waitMs('m'), want);
+    }
+});
+
+test('a 2xx resets the backoff strikes', () => {
+    const c = clock();
+    const q = Q.createQuotaTracker({ now: c.now });
+    q.noteResponse('m', 429, H()); q.noteResponse('m', 429, H());
+    q.noteResponse('m', 200, H());
+    c.t += 10000;
+    q.noteResponse('m', 429, H());
+    assert.equal(q.waitMs('m'), 1000);
+});
+
+test('429 backoff is capped at 60 s', () => {
+    const q = Q.createQuotaTracker({ now: clock().now });
+    for (let i = 0; i < 12; i++) q.noteResponse('m', 429, H());
+    assert.equal(q.waitMs('m'), 60000);
+});
