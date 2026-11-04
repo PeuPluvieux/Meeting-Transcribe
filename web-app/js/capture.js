@@ -26,7 +26,7 @@ let systemAudioChunks = [];
 let systemAudioChunkTimer = null;
 let systemAudioChunkStartTime = null;
 let systemAudioChunkStartElapsed = 0;          // recording-time (s) when the current chunk began
-const pendingMeetingJobs = new Set();          // in-flight transcription promises (awaited on Stop)
+const pendingMeetingJobs = new Map();          // in-flight transcription promises (awaited on Stop)
 let _rotationStopPending = false;              // rotation's rec.stop() called, its async onstop not yet run
 let _recordingGen = 0;                         // bumps per recording; late async results from an old meeting are discarded
 let failedMeetingChunks = [];                  // chunks that exhausted every retry/fallback
@@ -423,7 +423,7 @@ function stopSystemAudioCapture({ flush = false } = {}) {
 
 async function settleMeetingJobs(timeoutMs) {
     if (!pendingMeetingJobs.size) return;
-    await Promise.race([Promise.allSettled([...pendingMeetingJobs]), sleep(timeoutMs)]);
+    await Promise.race([Promise.allSettled([...pendingMeetingJobs.keys()]), sleep(timeoutMs)]);
 }
 
 function updateSystemAudioStatus(active) {
@@ -532,8 +532,8 @@ async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AU
     throw lastErr || new Error('Transcription failed');
 }
 
-function trackMeetingJob(promise) {
-    pendingMeetingJobs.add(promise);
+function trackMeetingJob(promise, chunk = null) {
+    pendingMeetingJobs.set(promise, chunk);   // chunk = still-reachable audio, so Stop can queue it
     promise.finally(() => pendingMeetingJobs.delete(promise));
     return promise;
 }
@@ -593,7 +593,7 @@ function transcribeSystemAudioChunk(blob, startSeconds) {
             failedMeetingChunks.push({ blob, startSeconds, gen });
             updateFailedChunksUI();
         });
-    return trackMeetingJob(job);
+    return trackMeetingJob(job, { blob, startSeconds, gen });
 }
 
 async function handleAddMeetingAudio() {

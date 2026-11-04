@@ -557,10 +557,12 @@ async function stopRecording() {
             undone.clear();                          // the abandoned retry must not re-queue them later
         }
         toQueue.push(...failedMeetingChunks);
+        const stillRunning = [...pendingMeetingJobs.values()];   // jobs that outlived the 30 s wait
+        toQueue.push(...stillRunning.filter(Boolean));           // their audio is in memory: queue it, never lose it
         failedMeetingChunks = [];
         toQueue = [...new Set(toQueue)].filter(c => c.gen === _recordingGen);
         const queued = await queueChunks(currentMeetingId, toQueue);   // kept for "Retry Missing Audio"
-        const lost = pendingMeetingJobs.size + (toQueue.length - queued); // in-flight jobs hold no reachable blob
+        const lost = stillRunning.filter(c => !c).length + (toQueue.length - queued); // only jobs without a reachable blob are lost
         if (queued) showToast(t('chunksQueuedOnStop').replace('{n}', queued), 'warning');
         if (lost) showToast(t('chunksLostOnStop').replace('{n}', lost), 'warning');
         await sleep(500);                            // last Web Speech final result
