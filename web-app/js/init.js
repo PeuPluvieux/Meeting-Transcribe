@@ -22,6 +22,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyUiLanguage(appStorage.getItem('ui_lang') || 'en');
     showBetaBanner();
     console.info(`[Meeting Notes AI] v${APP_VERSION}${IS_BETA ? ' (beta)' : ''}`);
+    const _verEl = document.getElementById('appVersionText');
+    if (_verEl) _verEl.textContent = 'v' + APP_VERSION + (IS_BETA ? ' (beta)' : '');
     loadMeetingTitle();
     loadSettings();
     checkGroqModels(); // async, non-blocking; cached 24 h

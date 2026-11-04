@@ -1,5 +1,5 @@
 // ============================================================
-// Meeting Notes AI v9.11.0
+// Meeting Notes AI v9.11.1
 // Mic: Web Speech API OR Gladia (switchable) + System Audio via Groq Whisper
 // ============================================================
 
@@ -8,7 +8,7 @@
 // Leave empty ('') if you want users to enter it in Settings.
 const DEFAULT_GROQ_KEY = '';
 
-const APP_VERSION = '9.11.0';
+const APP_VERSION = '9.11.1';
 
 // ==================== CHANNEL / STORAGE NAMESPACE ====================
 // /beta/ is the same origin as the live app, so it must use separate storage.
