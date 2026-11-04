@@ -456,6 +456,8 @@ async function _startRecordingImpl() {
         if (r === false) { checkDraftRecovery(); return; }   // keep the draft; saveCurrentMeeting already toasted
         if (r === true) showToast(t('draftAutoSaved'), 'info');
     }
+    // Lock before any state is touched: a refused start must not wipe the done meeting or the live transcript.
+    if (!(await acquireRecorderLock())) { showToast(t('otherTabRecording'), 'warning'); return; }
     if (appState === 'done') {
         meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
         currentSegmentId = 0; currentMeetingId = null;
@@ -470,7 +472,6 @@ async function _startRecordingImpl() {
     clearLiveTranscript();
     const _ltEl = document.getElementById('liveTranscript');
     if (_ltEl) _ltEl.innerHTML = `<p class="placeholder">${t('transcriptPlaceholder')}</p>`;
-    if (!(await acquireRecorderLock())) { showToast(t('otherTabRecording'), 'warning'); return; }
     recordingStartTime = Date.now(); pausedDuration = 0; pauseStartTime = null;
     _recordingGen++; failedMeetingChunks = []; updateFailedChunksUI();
     _speechStartedThisMeeting = false; _micLost = false;
@@ -537,31 +538,37 @@ async function stopRecording() {
     if (appState !== 'recording' && appState !== 'paused') return;
     if (appState === 'paused' && pauseStartTime) { pausedDuration += Date.now() - pauseStartTime; pauseStartTime = null; }
     setAppState('stopping');
-    stopTimer();                                     // duration = moment Stop was pressed, not after flushing
-    if (getMicProvider() === 'gladia') stopGladiaMic(); else stopSpeechRecognition();
-    showProcessingOverlay(true, t('finishingAudio'));
-    await stopSystemAudioCapture({ flush: true });   // D3: last chunk is transcribed, not dropped
-    await settleMeetingJobs(30000);                  // wait for in-flight chunks (bounded)
-    let lost = 0;
-    if (failedMeetingChunks.length) {
-        const undone = new Set();                    // chunks the retry hasn't finished (read after a timeout)
-        await Promise.race([retryFailedChunks({ quiet: true, deadlineMs: 30000, undone }), sleep(30000)]);
-        lost += undone.size;                         // in-flight or unattempted when the race timed out
-        undone.clear();                              // the abandoned retry must not re-queue them later
+    try {
+        stopTimer();                                 // duration = moment Stop was pressed, not after flushing
+        if (getMicProvider() === 'gladia') stopGladiaMic(); else stopSpeechRecognition();
+        showProcessingOverlay(true, t('finishingAudio'));
+        await stopSystemAudioCapture({ flush: true });   // D3: last chunk is transcribed, not dropped
+        await settleMeetingJobs(30000);              // wait for in-flight chunks (bounded)
+        let lost = 0;
+        if (failedMeetingChunks.length) {
+            const undone = new Set();                // chunks the retry hasn't finished (read after a timeout)
+            await Promise.race([retryFailedChunks({ quiet: true, deadlineMs: 30000, undone }), sleep(30000)]);
+            lost += undone.size;                     // in-flight or unattempted when the race timed out
+            undone.clear();                          // the abandoned retry must not re-queue them later
+        }
+        lost += pendingMeetingJobs.size + failedMeetingChunks.length;  // counted after the race: no double counting
+        if (lost) showToast(t('chunksLostOnStop').replace('{n}', lost), 'warning');
+        failedMeetingChunks = [];
+        await sleep(500);                            // last Web Speech final result
+        const badge = document.getElementById('micBadge');
+        if (badge) badge.style.display = 'none';
+        resetAudioQualityMonitor();
+        stopDraftHeartbeat();
+        writeDraft();                                // final draft before processing
+        setAppState('processing');
+        updateFailedChunksUI();
+        await processRecording();
+        setAppState('done');
+    } finally {
+        // Any throw above would otherwise leave the recorder lock held and the UI stuck.
+        // The draft written before processing keeps the meeting recoverable.
+        if (appState === 'stopping' || appState === 'processing') setAppState('done');
     }
-    lost += pendingMeetingJobs.size + failedMeetingChunks.length;  // counted after the race: no double counting
-    if (lost) showToast(t('chunksLostOnStop').replace('{n}', lost), 'warning');
-    failedMeetingChunks = [];
-    await sleep(500);                                // last Web Speech final result
-    const badge = document.getElementById('micBadge');
-    if (badge) badge.style.display = 'none';
-    resetAudioQualityMonitor();
-    stopDraftHeartbeat();
-    writeDraft();                                    // final draft before processing
-    setAppState('processing');
-    updateFailedChunksUI();
-    await processRecording();
-    setAppState('done');
 }
 
 // FIX: updateRecordingUI driven by appState
