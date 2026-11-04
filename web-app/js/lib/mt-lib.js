@@ -57,7 +57,7 @@
     // Groq's CORS policy hides retry-after/x-ratelimit-* from browsers, but the 429 body says
     // "... Please try again in 3m2.5s." — recover the wait from that message. null = no hint.
     function retryHintFromMessage(msg) {
-        const m = /try again ins+([0-9hms.]+)/i.exec(String(msg ?? ''));
+        const m = /try again in\s+([0-9hms.]+)/i.exec(String(msg ?? ''));
         return m ? parseDurationMs(m[1]) : null;
     }
 
