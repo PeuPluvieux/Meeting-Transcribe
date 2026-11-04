@@ -27,14 +27,16 @@ const APP_SETTING_KEYS = ['anthropic_api_key', 'auto_cleanup_enabled', 'auto_cle
 // ?replay            — "Add Meeting Audio" plays a local audio file instead of screen-share
 // ?replay=audible    — same, and you can hear it
 // ?nomic             — don't start the mic (clean replay tests)
-// ?fault=groq429:N   — first N Groq calls return 429 (retry-after: 2)
-// ?fault=groqfail    — every Groq call returns 500
+// ?fault=groq429:N     — first N Groq calls return 429 (retry-after: 2)
+// ?fault=groq429long:N — first N Groq calls return 429 (retry-after: 60) → forces the backup model
+// ?fault=groqfail      — every Groq call returns 500
 const DEV_PARAMS = new URLSearchParams(location.search);
 const REPLAY_MODE = DEV_PARAMS.has('replay');
 const _fault = (() => {
     const f = DEV_PARAMS.get('fault') || '';
     const m = /groq429:(\d+)/.exec(f);
-    return { groq429: m ? parseInt(m[1], 10) : 0, groqFail: f.includes('groqfail') };
+    const l = /groq429long:(\d+)/.exec(f);
+    return { groq429: m ? parseInt(m[1], 10) : 0, groq429long: l ? parseInt(l[1], 10) : 0, groqFail: f.includes('groqfail') };
 })();
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -55,6 +57,11 @@ async function groqFetch(url, opts) {
         _fault.groq429--;
         return new Response(JSON.stringify({ error: { message: 'Injected rate limit (?fault=groq429)' } }),
             { status: 429, headers: { 'retry-after': '2' } });
+    }
+    if (_fault.groq429long > 0) {
+        _fault.groq429long--;
+        return new Response(JSON.stringify({ error: { message: 'Injected long rate limit (?fault=groq429long)' } }),
+            { status: 429, headers: { 'retry-after': '60' } });
     }
     return fetch(url, opts);
 }

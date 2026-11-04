@@ -396,53 +396,66 @@ async function analyzeWithGemini(text) {
     return { summary: parsed.summary || '', keyPoints: parsed.keyPoints || [], keyDecisions: parsed.keyDecisions || [], actionItems: parsed.actionItems || [], nextSteps: parsed.nextSteps || [] };
 }
 
-// Shared Groq chat call: walks MODELS.groqChat, honours retry-after, skips retired models.
+// Shared Groq chat call: walks the chat chain, consults the quota tracker before each request,
+// honours retry-after, skips retired models. Round 1 waits at most 20 s per model; if every model
+// is only rate-limited, round 2 waits up to 90 s for the soonest one instead of failing the summary.
 async function groqChat({ messages, maxTokens = 2048, json = false, temperature = 0.3, onStatus } = {}) {
     const key = appStorage.getItem('groq_api_key');
     if (!key) throw new Error('Groq API key not configured. Add it in Settings.');
+    const tokens = MTQuota.estimateChatTokens(messages, maxTokens);
+    const chain = groqChatChain();
     let lastErr;
-    for (const model of MODELS.groqChat) {
-        for (let attempt = 0; attempt < 3; attempt++) {
-            let resp;
-            try {
-                resp = await groqFetch('https://api.groq.com/openai/v1/chat/completions', {
-                    method: 'POST',
-                    headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: model.id, messages, temperature, max_tokens: maxTokens,
-                        ...(json ? { response_format: { type: 'json_object' } } : {}),
-                        ...model.extra
-                    }),
-                    signal: AbortSignal.timeout(90000)
-                });
-            } catch (e) {
-                lastErr = (e.name === 'TimeoutError' || e.name === 'AbortError') ? new Error('Groq request timed out') : e;
-                continue;
-            }
-            if (resp.status === 429) {
-                const wait = MTLib.retryDelayMs(h => resp.headers.get(h), attempt);
-                lastErr = new Error('Groq rate limit reached on every model — try again in a minute.');
-                if (wait > 20000) break; // long cooldown → use the next model (separate quota) right away
-                onStatus?.(`Groq busy — waiting ${Math.ceil(wait / 1000)}s…`);
-                await sleep(wait);
-                continue;
-            }
-            if (!resp.ok) {
-                const err = await resp.json().catch(() => ({}));
-                lastErr = new Error(`${err.error?.message || 'Groq request failed'} (HTTP ${resp.status})`);
-                if (resp.status >= 500) { await sleep(1000 * (attempt + 1)); continue; }
-                if (resp.status === 404 || (resp.status === 400 && /model|decommission/i.test(lastErr.message))) break;
-                if (MTLib.isRetryableGroq400(resp.status, err)) {
-                    if (attempt === 0) continue; // retry once on the same model
-                    break;                       // then fall through to the next model
+    for (let round = 0; round < 2; round++) {
+        const maxWaitMs = round === 0 ? 20000 : 90000;
+        for (const model of chain) {
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const wait = groqQuota.waitMs(model.id, { tokens });
+                if (wait > maxWaitMs) { lastErr = new GroqLimitError(model.id, wait); break; }
+                if (wait > 0) {
+                    onStatus?.(t('groqWaiting').replace('{wait}', fmtWait(wait)));
+                    await sleep(wait);
                 }
-                throw lastErr;
+                groqQuota.noteSend(model.id, { tokens });
+                let resp;
+                try {
+                    resp = await groqFetch('https://api.groq.com/openai/v1/chat/completions', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            model: model.id, messages, temperature, max_tokens: maxTokens,
+                            ...(json ? { response_format: { type: 'json_object' } } : {}),
+                            ...model.extra
+                        }),
+                        signal: AbortSignal.timeout(90000)
+                    });
+                } catch (e) {
+                    lastErr = (e.name === 'TimeoutError' || e.name === 'AbortError') ? new Error('Groq request timed out') : e;
+                    continue;
+                }
+                groqQuota.noteResponse(model.id, resp.status, h => resp.headers.get(h));
+                saveQuotaState();
+                if (resp.status === 429) {
+                    lastErr = new GroqLimitError(model.id, groqQuota.waitMs(model.id, { tokens }));
+                    continue; // the next waitMs() check applies retry-after (or moves to the next model)
+                }
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    lastErr = new Error(`${err.error?.message || 'Groq request failed'} (HTTP ${resp.status})`);
+                    if (resp.status >= 500) { await sleep(1000 * (attempt + 1)); continue; }
+                    if (resp.status === 404 || (resp.status === 400 && /model|decommission/i.test(lastErr.message))) break;
+                    if (MTLib.isRetryableGroq400(resp.status, err)) {
+                        if (attempt === 0) continue; // retry once on the same model
+                        break;                       // then fall through to the next model
+                    }
+                    throw lastErr;
+                }
+                const data = await resp.json();
+                const content = data.choices?.[0]?.message?.content;
+                if (!content) { lastErr = new Error('Empty response from Groq'); continue; }
+                return content;
             }
-            const data = await resp.json();
-            const content = data.choices?.[0]?.message?.content;
-            if (!content) { lastErr = new Error('Empty response from Groq'); continue; }
-            return content;
         }
+        if (!(lastErr instanceof GroqLimitError)) break; // round 2 only helps when rate limits were the problem
     }
     throw lastErr || new Error('Groq request failed');
 }

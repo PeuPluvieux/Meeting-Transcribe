@@ -480,12 +480,24 @@ function buildWhisperForm(blob, model, sourceLang) {
     return formData;
 }
 
-// Tries each model in MODELS.groqWhisperLive with retry-after-aware retries.
-// Returns transcript text ('' for silence); throws only when every option is exhausted.
-async function groqWhisper(blob, groqKey, sourceLang) {
+// Tries each model in the Whisper chain. The quota tracker skips a model that is resting (429
+// cooldown, request or audio-seconds budget), so a long Groq cooldown switches to the backup model
+// without another 429. Returns transcript text ('' for silence); throws only when every option is
+// exhausted (GroqLimitError when every model is resting longer than maxWaitMs).
+async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AUDIO_CHUNK_MS / 1000, maxWaitMs = 15000 } = {}) {
     let lastErr;
-    for (const model of MODELS.groqWhisperLive) {
+    const chain = groqModelChain(MODELS.groqWhisperLive);
+    for (let i = 0; i < chain.length; i++) {
+        const model = chain[i];
         for (let attempt = 0; attempt < 3; attempt++) {
+            const wait = groqQuota.waitMs(model, { audioSeconds }, GROQ_LIMITS.whisper);
+            if (wait > maxWaitMs) {
+                lastErr = new GroqLimitError(model, wait);
+                if (chain[i + 1]) noteGroqBackup(model, wait);
+                break;
+            }
+            if (wait > 0) await sleep(wait);
+            groqQuota.noteSend(model);
             let resp;
             try {
                 resp = await groqFetch('https://api.groq.com/openai/v1/audio/transcriptions', {
@@ -495,15 +507,17 @@ async function groqWhisper(blob, groqKey, sourceLang) {
                     signal: AbortSignal.timeout(30000)
                 });
             } catch (e) { lastErr = e; await sleep(1000 * (attempt + 1)); continue; } // network/timeout
-            if (resp.ok) { const data = await resp.json(); return data.text?.trim() || ''; }
+            groqQuota.noteResponse(model, resp.status, h => resp.headers.get(h));
+            if (resp.ok) {
+                groqQuota.noteAudio(model, audioSeconds, GROQ_LIMITS.whisper);
+                saveQuotaState();
+                const data = await resp.json();
+                return data.text?.trim() || '';
+            }
+            saveQuotaState();
             const err = await resp.json().catch(() => ({}));
             lastErr = new Error(`${err.error?.message || 'Transcription failed'} (HTTP ${resp.status})`);
-            if (resp.status === 429) {
-                // Long cooldown on this model → switch to the next model now instead of stalling live captions
-                if ((MTLib.parseDurationMs(resp.headers.get('retry-after')) ?? 0) > 15000) break;
-                await sleep(MTLib.retryDelayMs(h => resp.headers.get(h), attempt, { capMs: 15000 }));
-                continue;
-            }
+            if (resp.status === 429) continue; // the next waitMs() check applies retry-after (or moves to the next model)
             if (resp.status >= 500) { await sleep(1000 * (attempt + 1)); continue; }
             if (resp.status === 401) {
                 if (!_groqKeyErrorShown) { _groqKeyErrorShown = true; showToast(t('groqKeyRejected'), 'error'); }
