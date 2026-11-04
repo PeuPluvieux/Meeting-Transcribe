@@ -4,7 +4,7 @@
 | ID | Bug | Root cause | Fix |
 |---|---|---|---|
 | Q1 | A model that was resting kept getting hit with fresh 429s | Each call retried blindly; and Groq's CORS exposes only `cache-control`/`content-type` to browsers, so `retry-after`/`x-ratelimit-*` were never readable | `js/lib/quota-lib.js` tracker: cooldown from the 429 body ("Please try again in 3m2.5s") → else exponential backoff 1/2/4… s (cap 60 s); local audio-seconds/hour+day counters; a resting model is skipped up front (backup toast). State persists in `groq_quota_state` |
-| Q2 | Summary failed when every chat model was briefly limited | One pass over the chain, 20 s max wait | `groqChat` second round waits up to 90 s for the soonest model |
+| Q2 | Summary failed when every chat model was briefly limited | One pass over the chain, 20 s max wait | `groqChat` second round waits up to 90 s per model, in chain order, before failing |
 | Q3 | Meeting audio still failing at Stop was dropped | Failed chunks lived only in memory | Stored in IndexedDB `MeetingNotesAI(-beta)-queue` for 7 days; results banner "Retry Missing Audio" merges recovered text by timestamp (never deletes queued audio unless the save succeeded) |
 | Q4 | Two tabs could record at once and double-spend one key | No cross-tab coordination | Web Locks `meeting-transcribe-recorder`; held Start→done, released also when Stop throws |
 | Q5 | A retired model ID broke a provider silently (cf. P3) | IDs only checked by hand | Cached 24 h `GET /openai/v1/models`; configured IDs the key doesn't offer are skipped (never to an empty chain) |
