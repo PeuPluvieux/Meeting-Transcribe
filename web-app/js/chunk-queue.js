@@ -98,9 +98,10 @@ async function refreshMissingAudioBanner() {
     document.getElementById('missingAudioText').textContent = t('missingAudio').replace('{n}', n);
     const retryBtn = document.getElementById('missingAudioRetryBtn');
     retryBtn.textContent = _queueRetrying ? t('missingAudioRetrying') : t('missingAudioRetry');
-    retryBtn.disabled = _queueRetrying;
+    const busy = _queueRetrying || appState === 'processing';
+    retryBtn.disabled = busy;
     document.getElementById('missingAudioDiscardBtn').textContent = t('missingAudioDiscard');
-    document.getElementById('missingAudioDiscardBtn').disabled = _queueRetrying;
+    document.getElementById('missingAudioDiscardBtn').disabled = busy;
 }
 
 async function retryQueuedChunksForCurrent() {
@@ -111,24 +112,22 @@ async function retryQueuedChunksForCurrent() {
     if (!groqKey) { showToast(t('groqKeyMissing'), 'warning'); return; }
     _queueRetrying = true;
     refreshMissingAudioBanner();
-    let recovered = 0, remaining = 0, limitErr = null, failed = false;
+    let recovered = 0, remaining = 0, limitErr = null, failed = false, abort = false;
     try {
         const items = (await getQueuedChunks(meetingId)).sort((a, b) => a.startSeconds - b.startSeconds);
-        const meeting = await getMeeting(meetingId);
-        if (!meeting) { await removeQueuedChunks(items.map(i => i.id)); return; }
-        let nextId = meeting.transcript.reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
         const tgt = appStorage.getItem('target_lang') || 'en';
-        const done = [];
+        // Phase 1: transcribe (and translate) only; no meeting is touched, so nothing can be lost or go stale.
+        const results = [], done = [];
         for (const it of items) {
             try {
                 const text = await groqWhisper(it.blob, groqKey, it.sourceLang, { audioSeconds: it.audioSeconds, maxWaitMs: 20000 });
                 if (text) {
-                    const { seg, displayText } = buildSegment(text, 'meeting', it.startSeconds, nextId++);
+                    let translated = null;
                     if (tgt !== 'none') {
-                        try { seg.translated = await translateText(displayText, seg.language || it.sourceLang, tgt); } catch (e) { /* keep untranslated */ }
+                        const probe = buildSegment(text, 'meeting', it.startSeconds, -1);
+                        try { translated = await translateText(probe.displayText, probe.seg.language || it.sourceLang, tgt); } catch (e) { /* keep untranslated */ }
                     }
-                    MTLib.insertSegmentSorted(meeting.transcript, seg);
-                    recovered++;
+                    results.push({ item: it, text, translated });
                 }
                 done.push(it.id);
             } catch (e) {
@@ -137,16 +136,35 @@ async function retryQueuedChunksForCurrent() {
             }
         }
         remaining = items.length - done.length;
+        // Phase 2: merge into the freshest copy of the meeting.
         if (done.length) {
-            meeting.fullTranscript = MTLib.rebuildFullTranscript(meeting.transcript);
-            await saveMeeting(meeting);       // save first: a crash here may duplicate text, never lose it
-            await removeQueuedChunks(done);
-            if (currentMeetingId === meetingId && ['idle', 'done'].includes(appState)) {
-                meetingData.transcript = meeting.transcript;
-                meetingData.fullTranscript = meeting.fullTranscript;
-                currentSegmentId = nextId;
-                displayResults();
+            const live = currentMeetingId === meetingId && ['idle', 'done'].includes(appState);
+            if (live) {
+                for (const r of results) {
+                    const { seg } = buildSegment(r.text, 'meeting', r.item.startSeconds, currentSegmentId++);
+                    seg.translated = r.translated;
+                    MTLib.insertSegmentSorted(meetingData.transcript, seg);
+                }
+                meetingData.fullTranscript = MTLib.rebuildFullTranscript(meetingData.transcript);
+                const saved = await saveCurrentMeeting({ silent: true });
+                if (!saved) { abort = true; return; }   // saveCurrentMeeting already toasted; queue kept
+            } else {
+                const meeting = await getMeeting(meetingId);
+                if (!meeting) { showToast(t('missingAudioNoMeeting'), 'warning'); abort = true; return; }
+                let nextId = meeting.transcript.reduce((m, x) => Math.max(m, Number(x.id) || 0), -1) + 1;
+                for (const r of results) {
+                    const { seg } = buildSegment(r.text, 'meeting', r.item.startSeconds, nextId++);
+                    seg.translated = r.translated;
+                    MTLib.insertSegmentSorted(meeting.transcript, seg);
+                }
+                meeting.fullTranscript = MTLib.rebuildFullTranscript(meeting.transcript);
+                await saveMeeting(meeting);
             }
+            recovered = results.length;
+            // Saved first: a crash here may duplicate text, never lose it.
+            try { await removeQueuedChunks(done); }
+            catch (e) { console.warn('[Queue] cleanup failed:', e); showToast(t('missingAudioCleanupFailed'), 'warning'); }
+            if (live) displayResults();
         }
     } catch (e) {
         failed = true;
@@ -155,7 +173,7 @@ async function retryQueuedChunksForCurrent() {
         _queueRetrying = false;
         refreshMissingAudioBanner();
     }
-    if (failed) return;
+    if (failed || abort) return;
     if (limitErr) showToast(limitErr.message, 'warning');
     else if (remaining) showToast(t('chunksStillFailing').replace('{n}', remaining), 'warning');
     else showToast(recovered ? t('missingAudioDone').replace('{n}', recovered) : t('missingAudioEmpty'), 'success');
