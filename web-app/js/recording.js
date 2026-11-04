@@ -567,7 +567,11 @@ async function stopRecording() {
     } finally {
         // Any throw above would otherwise leave the recorder lock held and the UI stuck.
         // The draft written before processing keeps the meeting recoverable.
-        if (appState === 'stopping' || appState === 'processing') setAppState('done');
+        if (appState === 'stopping' || appState === 'processing') {
+            stopDraftHeartbeat();
+            showProcessingOverlay(false);
+            setAppState('done');
+        }
     }
 }
 
