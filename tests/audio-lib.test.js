@@ -165,3 +165,14 @@ test('filterWhisperResult joins CJK segments without inserted spaces', () => {
     const data = { segments: [{ text: '這個 PN 的', no_speech_prob: 0.1 }, { text: 'issue 要處理', no_speech_prob: 0.1 }] };
     assert.equal(A.filterWhisperResult(data), '這個 PN 的issue 要處理');
 });
+
+test('chunker: flush never emits a chunk longer than 13 s (splits in halves, lossless)', () => {
+    const { c, out } = collect();
+    feed(c, Array.from({ length: 131 }, () => loud()));   // 13.1 s buffered, below the 132-frame trigger
+    c.flush();
+    assert.equal(out.length, 2);
+    assert.deepEqual(out.map(ch => ch.seconds), [6.6, 6.5]);
+    assert.equal(out.reduce((s, ch) => s + ch.pcm.length, 0), 131 * FRAME);
+    for (const ch of out) assert.ok(ch.seconds <= 13);
+    assert.equal(c.bufferedSeconds(), 0);
+});

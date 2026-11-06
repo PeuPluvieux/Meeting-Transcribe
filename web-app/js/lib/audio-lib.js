@@ -105,6 +105,11 @@
 
         function flush({ minSeconds = 1 } = {}) {
             if (!frames.length) return;
+            if (frames.length > maxCut) {                  // never emit a chunk longer than maxCutSeconds
+                emit(Math.ceil(frames.length / 2));        // lossless: two halves, both > 1 s here
+                emit(frames.length);
+                return;
+            }
             if (frames.length * frameSec + 1e-9 < minSeconds) { frames = []; return; }
             emit(frames.length);
         }
