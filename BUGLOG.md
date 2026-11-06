@@ -1,5 +1,13 @@
 # Bug Log
 
+## v9.12.0 (2026-11-06) — B4a live audio pipeline
+| ID | Bug | Root cause | Fix |
+|---|---|---|---|
+| D4 | Words cut at every 12 s boundary | MediaRecorder stop → 200 ms gap → restart on a timer | AudioWorklet PCM frames; chunk cut at the quietest 300 ms between 10 and 13 s; no gap |
+| A1 | Whisper invented "Thank you for watching" / 字幕由… on silence, and silence used Groq quota | Every 12 s chunk was sent, silent or not; `json` responses carry no confidence | Silence gate (≥ 3 frames ≥ −45 dBFS); `verbose_json` + drop `no_speech_prob > 0.6` and known phrases |
+| A2 | Chunk timing drifted in a hidden tab | `setInterval` rotation is throttled in background tabs | Chunking counts audio frames, not timers |
+| P5 (partial) | Local Whisper got raw webm bytes | Transformers.js needs decoded 16 kHz Float32 | WAV chunks pass their PCM as Float32 (worker + v3 model still B4c) |
+
 ## v9.11.2 (2026-11-06) — B3 pre-main cleanup
 | ID | Bug | Root cause | Fix |
 |---|---|---|---|
