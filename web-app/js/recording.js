@@ -506,6 +506,7 @@ async function _startRecordingImpl() {
 
 function pauseRecording() {
     if (appState !== 'recording') return;
+    flushPcmCapture();   // send the audio up to the pause; nothing is transcribed while paused
 
     if (getMicProvider() === 'gladia') pauseGladiaMic(); else pauseSpeechRecognition();
 

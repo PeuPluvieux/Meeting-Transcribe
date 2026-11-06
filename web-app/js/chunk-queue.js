@@ -45,7 +45,7 @@ async function queueChunks(meetingId, chunks) {
         await _queueTx('readwrite', store => {
             for (const c of chunks) {
                 store.put({ id: generateUUID(), meetingId, startSeconds: c.startSeconds, blob: c.blob,
-                    sourceLang, audioSeconds: SYSTEM_AUDIO_CHUNK_MS / 1000, createdAt });
+                    sourceLang, audioSeconds: c.audioSeconds || SYSTEM_AUDIO_CHUNK_MS / 1000, createdAt });
             }
         });
         return chunks.length;
