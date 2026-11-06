@@ -11,28 +11,41 @@ async function startPcmCapture(audioStream) {
     let ctx;
     try {
         ctx = new AudioContext({ sampleRate: MTAudio.SAMPLE_RATE });
-        await ctx.audioWorklet.addModule('js/lib/audio-lib.js?v=' + APP_VERSION);
-        await ctx.audioWorklet.addModule('js/pcm-worklet.js?v=' + APP_VERSION);
-        const src = ctx.createMediaStreamSource(audioStream);
-        const node = new AudioWorkletNode(ctx, 'pcm-tap', { numberOfInputs: 1, numberOfOutputs: 1 });
-        const mute = ctx.createGain();
-        mute.gain.value = 0;                     // keeps the graph pulled without playing the audio back
+        let src, node, mute;
+        const setup = (async () => {
+            await ctx.audioWorklet.addModule('js/lib/audio-lib.js?v=' + APP_VERSION);
+            await ctx.audioWorklet.addModule('js/pcm-worklet.js?v=' + APP_VERSION);
+            src = ctx.createMediaStreamSource(audioStream);
+            node = new AudioWorkletNode(ctx, 'pcm-tap', { numberOfInputs: 1, numberOfOutputs: 1 });
+            mute = ctx.createGain();
+            mute.gain.value = 0;                 // keeps the graph pulled without playing the audio back
+            src.connect(node);
+            node.connect(mute);
+            mute.connect(ctx.destination);
+            await ctx.resume();
+            return 'ok';
+        })();
+        setup.catch(() => {});                   // a late failure after the deadline is already handled
+        const done = await Promise.race([setup, sleep(5000).then(() => 'timeout')]);
+        if (done !== 'ok' || ctx.state !== 'running') throw new Error('worklet start ' + (done === 'ok' ? 'not running (' + ctx.state + ')' : 'timed out'));
+        // Stop (or double-click) while the start was pending: tear down but leave the tracks to the caller.
+        if (appState !== 'recording' && appState !== 'paused') {
+            try { src.disconnect(); node.disconnect(); mute.disconnect(); } catch (_) { /* ignore */ }
+            ctx.close().catch(() => {});
+            return 'aborted';
+        }
         const state = { ctx, src, node, mute, stream: audioStream, chunker: null, chunkStartElapsed: null };
         state.chunker = MTAudio.createChunker({ onChunk: c => _emitPcmChunk(state, c) });
         node.port.onmessage = e => {
-            if (_pcm !== state || appState === 'paused') return;   // paused audio is not transcribed
+            if (_pcm !== state || appState !== 'recording') return;   // paused/stopping audio is not transcribed
             if (state.chunkStartElapsed === null) state.chunkStartElapsed = getElapsedSeconds();
             state.chunker.push(new Int16Array(e.data));
         };
-        src.connect(node);
-        node.connect(mute);
-        mute.connect(ctx.destination);
-        await ctx.resume();
         _pcm = state;
         return true;
     } catch (e) {
         console.warn('[Meeting audio] AudioWorklet unavailable, using MediaRecorder:', e);
-        try { ctx && ctx.close(); } catch (_) { /* ignore */ }
+        if (ctx) ctx.close().catch(() => {});
         return false;
     }
 }

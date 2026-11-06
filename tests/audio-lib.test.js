@@ -148,10 +148,30 @@ test('filterWhisperResult drops high no_speech_prob and phrase segments', () => 
     const data = { text: 'ignored', segments: [
         { text: ' Hello team,', no_speech_prob: 0.05 },
         { text: ' Thanks for watching!', no_speech_prob: 0.2 },
-        { text: ' um', no_speech_prob: 0.9 },
-        { text: ' the yield is 98 percent.', no_speech_prob: 0.6 },
+        { text: ' um', no_speech_prob: 0.9, avg_logprob: -1.5 },
+        { text: ' the yield is 98 percent.', no_speech_prob: 0.6, avg_logprob: -0.3 },
     ] };
     assert.equal(A.filterWhisperResult(data), 'Hello team, the yield is 98 percent.');
+});
+
+test('filterWhisperResult keeps high no_speech_prob when avg_logprob is good or missing', () => {
+    assert.equal(A.filterWhisperResult({ segments: [{ text: ' real speech', no_speech_prob: 0.9, avg_logprob: -0.2 }] }), 'real speech');
+    assert.equal(A.filterWhisperResult({ segments: [{ text: ' no logprob', no_speech_prob: 0.9 }] }), 'no logprob');
+});
+
+test('filterWhisperResult tolerates malformed segments', () => {
+    const data = { segments: [null, { text: 5 }, { text: ' ok' }, { text: ' fine', avg_logprob: -2 }] };
+    assert.equal(A.filterWhisperResult(data), 'ok fine');
+});
+
+test('filterWhisperResult reports drops through onDrop with a reason', () => {
+    const drops = [];
+    const data = { segments: [
+        { text: ' um', no_speech_prob: 0.9, avg_logprob: -1.5 },
+        { text: ' Thanks for watching!', no_speech_prob: 0.1, avg_logprob: -0.2 },
+        { text: ' kept', no_speech_prob: 0.1, avg_logprob: -0.2 }] };
+    assert.equal(A.filterWhisperResult(data, { onDrop: (t, why) => drops.push([t, why]) }), 'kept');
+    assert.deepEqual(drops, [['um', 'no_speech'], ['Thanks for watching!', 'phrase']]);
 });
 
 test('filterWhisperResult falls back to text when there are no segments', () => {

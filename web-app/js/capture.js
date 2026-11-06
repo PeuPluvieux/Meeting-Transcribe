@@ -376,7 +376,15 @@ async function startSystemAudioCapture() {
             return false;
         }
         const audioStream = new MediaStream(audioTracks);
-        if (await startPcmCapture(audioStream)) {
+        const _abort = () => { audioStream.getTracks().forEach(t => t.stop()); return false; };
+        // Stop (or a Stop click) during the picker/start window: never begin capturing afterwards.
+        if (!['recording', 'paused'].includes(appState)) return _abort();
+        const pcmStarted = await startPcmCapture(audioStream);
+        if (pcmStarted === 'aborted' || !['recording', 'paused'].includes(appState)) {
+            if (pcmStarted === true) stopPcmCapture();
+            return _abort();
+        }
+        if (pcmStarted === true) {
             showSystemAudioIndicator();
         } else {
             _startLegacyRecorder(audioStream);
@@ -528,7 +536,7 @@ async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AU
                 groqQuota.noteAudio(model, audioSeconds, GROQ_LIMITS.whisper);
                 saveQuotaState();
                 const data = await resp.json();
-                return MTAudio.filterWhisperResult(data);
+                return MTAudio.filterWhisperResult(data, { onDrop: (txt, why) => console.debug('[Whisper filter] dropped (' + why + '):', txt) });
             }
             const err = await resp.json().catch(() => ({}));
             groqQuota.noteResponse(model, resp.status, h => resp.headers.get(h),
@@ -619,10 +627,13 @@ function transcribeSystemAudioChunk(blob, startSeconds, { audioSeconds = SYSTEM_
     return trackMeetingJob(job, chunk);
 }
 
+let _addingMeetingAudio = false;
 async function handleAddMeetingAudio() {
+    if (_addingMeetingAudio) return;   // picker/start still pending: ignore a second click
     if (systemAudioActive) { stopSystemAudioCapture({ flush: ['recording', 'paused'].includes(appState) }); return; }
     if (appState !== 'recording') { showToast('Start recording first, then add meeting audio.', 'info'); return; }
-    await startSystemAudioCapture();
+    _addingMeetingAudio = true;
+    try { await startSystemAudioCapture(); } finally { _addingMeetingAudio = false; }
 }
 
 // ==================== GLADIA MIC TRANSCRIPTION ====================

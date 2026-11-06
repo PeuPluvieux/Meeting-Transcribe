@@ -137,18 +137,25 @@
     }
 
     const _CJK = /[　-鿿가-힯＀-￯]/;
-    function filterWhisperResult(data, { noSpeechProb = 0.6 } = {}) {
+    function filterWhisperResult(data, { noSpeechProb = 0.6, onDrop = null } = {}) {
         if (!data || typeof data !== 'object') return '';
         if (!Array.isArray(data.segments)) {
             const t = String(data.text || '').trim();
-            return isHallucination(t) ? '' : t;
+            if (isHallucination(t)) { if (onDrop && t) onDrop(t, 'phrase'); return ''; }
+            return t;
         }
         let out = '';
         for (const s of data.segments) {
             if (!s || typeof s.text !== 'string') continue;
-            if (Number(s.no_speech_prob) > noSpeechProb) continue;
             const t = s.text.trim();
-            if (!t || isHallucination(t)) continue;
+            // no_speech_prob is per decoding window (shared by a whole chunk's segments), so it only
+            // counts together with a poor avg_logprob; a missing avg_logprob keeps the segment.
+            if (Number(s.no_speech_prob) > noSpeechProb && Number(s.avg_logprob) < -1.0) {
+                if (onDrop && t) onDrop(t, 'no_speech');
+                continue;
+            }
+            if (!t) continue;
+            if (isHallucination(t)) { if (onDrop) onDrop(t, 'phrase'); continue; }
             // A space only between two non-CJK sides (Whisper's own zh text has none at CJK joins).
             const joinTight = _CJK.test(out[out.length - 1] || '') || _CJK.test(t[0]);
             out += out && !joinTight ? ' ' + t : t;
