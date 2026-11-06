@@ -101,7 +101,9 @@ function displayResults() {
     const retryBtn = document.getElementById('btnRetrySummary');
     if (retryBtn) {
         const st = meetingData.summaryStatus;
-        retryBtn.style.display = (st === 'failed' || st === 'pending') ? '' : 'none';
+        // Nothing to summarise yet (all audio is waiting in the queue): the missing-audio banner leads instead.
+        const hasText = meetingData.transcript.length > 0;
+        retryBtn.style.display = hasText && (st === 'failed' || st === 'pending') ? '' : 'none';
         retryBtn.textContent = st === 'pending' ? t('runSummary') : t('retrySummary');
     }
     document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });

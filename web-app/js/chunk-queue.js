@@ -82,6 +82,31 @@ async function purgeOldQueuedChunks() {
         });
         if (old && old.length) await removeQueuedChunks(old);
     } catch (e) { console.warn('[Queue] purge failed:', e); }
+    await adoptOrphanQueuedChunks();
+}
+
+// Queued audio whose meeting record is missing (the empty "pending" save at Stop failed, or the tab
+// died between queueing and saving) would be unreachable: give it an empty meeting in History so
+// "Retry Missing Audio" can still recover it.
+async function adoptOrphanQueuedChunks() {
+    try {
+        const all = await _queueTx('readonly', (store, set) => {
+            const req = store.getAll();
+            req.onsuccess = () => set(req.result || []);
+        });
+        const firstSeen = new Map();
+        for (const c of all || []) {
+            if (!firstSeen.has(c.meetingId) || c.createdAt < firstSeen.get(c.meetingId)) firstSeen.set(c.meetingId, c.createdAt);
+        }
+        for (const [meetingId, createdAt] of firstSeen) {
+            if (!meetingId || await getMeeting(meetingId)) continue;
+            const when = Number.isFinite(createdAt) ? createdAt : Date.now();
+            await saveMeeting({ id: meetingId, title: t('orphanMeetingTitle').replace('{date}', new Date(when).toLocaleString()),
+                timestamp: when, duration: '--:--', transcript: [], bookmarks: [], fullTranscript: '',
+                summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [],
+                summaryStatus: 'pending', summaryError: null });
+        }
+    } catch (e) { console.warn('[Queue] orphan check failed:', e); }
 }
 
 async function refreshMissingAudioBanner() {
@@ -104,6 +129,9 @@ async function refreshMissingAudioBanner() {
     document.getElementById('missingAudioDiscardBtn').disabled = busy;
 }
 
+// One retry at a time across all tabs: two tabs retrying the same queue would each add the recovered text.
+const QUEUE_RETRY_LOCK = 'meeting-transcribe-queue-retry';
+
 async function retryQueuedChunksForCurrent() {
     const meetingId = currentMeetingId;
     if (!meetingId || _queueRetrying) return;
@@ -112,9 +140,31 @@ async function retryQueuedChunksForCurrent() {
     if (!groqKey) { showToast(t('groqKeyMissing'), 'warning'); return; }
     _queueRetrying = true;
     refreshMissingAudioBanner();
+    if (!navigator.locks?.request) return _retryQueuedChunks(meetingId);
+    let got = false;
+    try {
+        await navigator.locks.request(QUEUE_RETRY_LOCK, { ifAvailable: true }, async lock => {
+            if (!lock) return;
+            got = true;
+            await _retryQueuedChunks(meetingId);
+        });
+    } catch (e) {
+        if (!got) return _retryQueuedChunks(meetingId);   // locks unusable here: don't block the retry
+    }
+    if (!got) {
+        _queueRetrying = false;
+        refreshMissingAudioBanner();
+        showToast(t('missingAudioOtherTab'), 'warning');
+    }
+}
+
+// Caller has set _queueRetrying; this always clears it.
+async function _retryQueuedChunks(meetingId) {
+    const groqKey = appStorage.getItem('groq_api_key');
     let recovered = 0, remaining = 0, limitErr = null, failed = false, abort = false;
     try {
         const items = (await getQueuedChunks(meetingId)).sort((a, b) => a.startSeconds - b.startSeconds);
+        if (!items.length) { abort = true; return; }   // another tab already recovered it: just refresh the banner
         const tgt = appStorage.getItem('target_lang') || 'en';
         // Phase 1: transcribe (and translate) only; no meeting is touched, so nothing can be lost or go stale.
         const results = [], done = [];
@@ -140,25 +190,27 @@ async function retryQueuedChunksForCurrent() {
         if (done.length) {
             const live = currentMeetingId === meetingId && ['idle', 'done'].includes(appState);
             if (live) {
-                let nextId = meetingData.transcript.reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
+                const md = meetingData;   // the object we insert into; a meeting switch during the save replaces meetingData
+                let nextId = md.transcript.reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
                 const newIds = new Set();
                 for (const r of results) {
                     const { seg } = buildSegment(r.text, 'meeting', r.item.startSeconds, nextId++);
                     seg.translated = r.translated;
                     newIds.add(seg.id);
-                    MTLib.insertSegmentSorted(meetingData.transcript, seg);
+                    MTLib.insertSegmentSorted(md.transcript, seg);
                 }
                 currentSegmentId = Math.max(currentSegmentId, nextId);
-                meetingData.fullTranscript = MTLib.rebuildFullTranscript(meetingData.transcript);
+                md.fullTranscript = MTLib.rebuildFullTranscript(md.transcript);
                 const saved = await saveCurrentMeeting({ silent: true, allowEmpty: true });
                 if (!saved) {   // roll the in-memory insert back so a later Retry does not duplicate it
-                    meetingData.transcript = meetingData.transcript.filter(s => !newIds.has(s.id));
-                    meetingData.fullTranscript = MTLib.rebuildFullTranscript(meetingData.transcript);
+                    md.transcript = md.transcript.filter(s => !newIds.has(s.id));
+                    md.fullTranscript = MTLib.rebuildFullTranscript(md.transcript);
                     abort = true; return;
                 }   // saveCurrentMeeting already toasted; queue kept
             } else {
                 const meeting = await getMeeting(meetingId);
-                if (!meeting) { showToast(t('missingAudioNoMeeting'), 'warning'); abort = true; return; }
+                // Deleted (or never saved) while we were transcribing: nothing to add to; the queue is left as is.
+                if (!meeting) { showToast(t('missingAudioMeetingGone'), 'warning'); abort = true; return; }
                 let nextId = meeting.transcript.reduce((m, x) => Math.max(m, Number(x.id) || 0), -1) + 1;
                 for (const r of results) {
                     const { seg } = buildSegment(r.text, 'meeting', r.item.startSeconds, nextId++);

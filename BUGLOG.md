@@ -1,5 +1,19 @@
 # Bug Log
 
+## v9.11.2 (2026-11-06) — B3 pre-main cleanup
+| ID | Bug | Root cause | Fix |
+|---|---|---|---|
+| R1 | A chunk still transcribing at Stop could add its text AND be queued, so Retry Missing Audio added it twice | Stop queued in-flight chunks but their promise still called `addTranscriptSegment` when it finished | `chunk.queued` set before queueing; a late result is held in `chunk.lateText` and only added if storing the queue failed |
+| R2 | A failed save after Retry could roll back segments on the wrong meeting | Rollback used the global `meetingData`, which a meeting switch during the save replaces | Rollback works on the object captured before inserting |
+| R3 | "Run Summary" did nothing on a meeting whose audio was all queued | `retrySummary` silently returned on an empty transcript | Button hidden until there is text; a toast points to Retry Missing Audio |
+| R4 | If the empty "pending" save at Stop failed, the queued audio had no meeting to retry it from | Queue rows keyed to a meeting id that was never written | `adoptOrphanQueuedChunks()` at startup creates a "Meeting … (audio waiting)" entry; Delete and auto-cleanup now remove the queue first so deleted meetings don't come back |
+| M3 | A renamed meeting got its title overwritten by the next save | `saveCurrentMeeting` always recomputed the title | Rename sets `titleEdited`; saves keep that title |
+| M7 | Missing-audio banner buttons stayed greyed out after processing | Banner drawn while `processing` was not redrawn | `setAppState` redraws it on idle/done |
+| M8 | Wrong toast ("Save this meeting first") if the meeting was deleted mid-retry | Old message assumed an unsaved meeting | New message says it was deleted; queue untouched |
+| M10 | A cooldown learned <1 s before a reload was forgotten | Debounced quota save not flushed | Flushed on `pagehide` |
+| T4 | Retrying in two tabs added the recovered text twice | No cross-tab coordination | Web Lock `meeting-transcribe-queue-retry`; the second tab is told to wait. An empty queue no longer shows a "no speech found" toast |
+| G1 | A mic start that threw (e.g. Gladia) left the app "recording" with the recorder lock held | Only a `false` return was handled | Throw is caught, toasted, and treated as not started |
+
 ## v9.11.0 (2026-11-04) — B3 quota scheduler
 | ID | Bug | Root cause | Fix |
 |---|---|---|---|

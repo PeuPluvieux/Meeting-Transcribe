@@ -112,7 +112,7 @@ async function runSummary() {
 
 async function retrySummary() {
     if (['recording', 'paused', 'stopping', 'processing'].includes(appState)) return;
-    if (!meetingData.transcript.length) return;
+    if (!meetingData.transcript.length) { showToast(t('summaryNeedsTranscript'), 'warning'); return; }
     setAppState('processing');
     await runSummary();
     setAppState('done');

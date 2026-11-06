@@ -1,5 +1,5 @@
 // ============================================================
-// Meeting Notes AI v9.11.1
+// Meeting Notes AI v9.11.2
 // Mic: Web Speech API OR Gladia (switchable) + System Audio via Groq Whisper
 // ============================================================
 
@@ -8,7 +8,7 @@
 // Leave empty ('') if you want users to enter it in Settings.
 const DEFAULT_GROQ_KEY = '';
 
-const APP_VERSION = '9.11.1';
+const APP_VERSION = '9.11.2';
 
 // ==================== CHANNEL / STORAGE NAMESPACE ====================
 // /beta/ is the same origin as the live app, so it must use separate storage.
@@ -115,6 +115,8 @@ function setAppState(newState) {
     appState = newState;
     if (newState === 'idle' || newState === 'done') releaseRecorderLock(); // defined in scheduler.js (call time)
     updateRecordingUI();
+    // The banner drawn during processing has its buttons disabled; redraw once the app is idle again.
+    if ((newState === 'idle' || newState === 'done') && typeof refreshMissingAudioBanner === 'function') refreshMissingAudioBanner();
 }
 
 // ==================== RECORDING VARS ====================

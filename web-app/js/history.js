@@ -109,11 +109,16 @@ async function saveCurrentMeeting({ silent = false, allowEmpty = false } = {}) {
     else if (snap.fullTranscript) title = snap.fullTranscript.slice(0, 60);
 
     let savedTimestamp = Date.now();
+    let titleEdited = false;
     if (snapMeetingId) {
-        try { const existing = await getMeeting(id); if (existing?.timestamp) savedTimestamp = existing.timestamp; } catch (e) { /* ignore */ }
+        try {
+            const existing = await getMeeting(id);
+            if (existing?.timestamp) savedTimestamp = existing.timestamp;
+            if (existing?.titleEdited && existing.title) { title = existing.title; titleEdited = true; }   // a rename sticks
+        } catch (e) { /* ignore */ }
     }
 
-    const meeting = { id, title, timestamp: savedTimestamp, duration,
+    const meeting = { id, title, titleEdited, timestamp: savedTimestamp, duration,
         transcript: snap.transcript, bookmarks: snap.bookmarks || [],
         fullTranscript: snap.fullTranscript,
         summary: snap.summary, keyPoints: snap.keyPoints,
@@ -141,6 +146,7 @@ async function renameMeeting(id) {
     const name = prompt('Enter new title:', meeting.title || 'Untitled Meeting');
     if (name?.trim()) {
         meeting.title = name.trim();
+        meeting.titleEdited = true;   // later saves (summary, recovered audio) keep this title
         await saveMeeting(meeting);
         loadMeetingHistory();
         showToast('Renamed!', 'success');
@@ -150,8 +156,8 @@ async function renameMeeting(id) {
 async function confirmDeleteMeeting(id) {
     if (!confirm('Delete this meeting? This cannot be undone.')) return;
     try {
+        await removeQueuedChunksForMeeting(id); // first: leftover audio would come back as an orphan meeting
         await deleteMeeting(id);
-        removeQueuedChunksForMeeting(id); // async; orphans are also purged after 7 days
         if (currentMeetingId === id) currentMeetingId = null;
         loadMeetingHistory();
         showToast('Meeting deleted', 'success');

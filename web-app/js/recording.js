@@ -488,8 +488,14 @@ async function _startRecordingImpl() {
     startTimer();
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'inline-flex';
-    const started = DEV_PARAMS.has('nomic') ? true
-        : micProvider === 'gladia' ? await startGladiaMic() : await startSpeechRecognition();
+    let started = false;
+    try {
+        started = DEV_PARAMS.has('nomic') ? true
+            : micProvider === 'gladia' ? await startGladiaMic() : await startSpeechRecognition();
+    } catch (e) {   // a throw (not just false) must not leave the recorder lock held and the UI "recording"
+        console.warn('[Record] mic start failed:', e);
+        showToast((e && e.message) || String(e), 'error');
+    }
     if (!started) {
         clearDraft();
         setAppState('idle');
@@ -561,7 +567,14 @@ async function stopRecording() {
         toQueue.push(...stillRunning.filter(Boolean));           // their audio is in memory: queue it, never lose it
         failedMeetingChunks = [];
         toQueue = [...new Set(toQueue)].filter(c => c.gen === _recordingGen);
+        toQueue.forEach(c => { c.queued = true; });              // before the await: a job finishing meanwhile defers to the queue
         const queued = await queueChunks(currentMeetingId, toQueue);   // kept for "Retry Missing Audio"
+        if (!queued) {                                           // storing failed: late results go back into the transcript
+            for (const c of toQueue) {
+                c.queued = false;
+                if (c.lateText) addTranscriptSegment(c.lateText, 'meeting', { startSeconds: c.startSeconds });
+            }
+        }
         const lost = stillRunning.filter(c => !c).length + (toQueue.length - queued); // only jobs without a reachable blob are lost
         if (queued) showToast(t('chunksQueuedOnStop').replace('{n}', queued), 'warning');
         if (lost) showToast(t('chunksLostOnStop').replace('{n}', lost), 'warning');

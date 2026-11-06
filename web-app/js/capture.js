@@ -585,15 +585,22 @@ function transcribeSystemAudioChunk(blob, startSeconds) {
         return Promise.resolve();
     }
     const sourceLang = appStorage.getItem('source_lang') || 'en-US';
+    // chunk.queued: Stop has handed this audio to the persistent queue, so a late result must not
+    // also land in the transcript (Retry Missing Audio would add it a second time).
+    const chunk = { blob, startSeconds, gen, queued: false, lateText: null };
     const job = groqWhisper(blob, groqKey, sourceLang)
-        .then(text => { if (text && gen === _recordingGen) addTranscriptSegment(text, 'meeting', { startSeconds }); })
+        .then(text => {
+            if (!text || gen !== _recordingGen) return;
+            if (chunk.queued) { chunk.lateText = text; return; }   // Stop adds it back if storing failed
+            addTranscriptSegment(text, 'meeting', { startSeconds });
+        })
         .catch(e => {
             console.warn('[Groq Whisper] chunk failed after all retries:', e.message);
-            if (gen !== _recordingGen) return;
-            failedMeetingChunks.push({ blob, startSeconds, gen });
+            if (gen !== _recordingGen || chunk.queued) return;
+            failedMeetingChunks.push(chunk);
             updateFailedChunksUI();
         });
-    return trackMeetingJob(job, { blob, startSeconds, gen });
+    return trackMeetingJob(job, chunk);
 }
 
 async function handleAddMeetingAudio() {

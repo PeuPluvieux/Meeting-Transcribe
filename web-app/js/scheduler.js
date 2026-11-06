@@ -18,13 +18,17 @@ function _loadQuotaState() {
 let groqQuota = MTQuota.createQuotaTracker({ state: _loadQuotaState() });
 
 let _quotaSaveTimer = null;
+function _writeQuotaState() {
+    try { appStorage.setItem(QUOTA_KEY, JSON.stringify({ ...groqQuota.toJSON(), keyTag: _groqKeyTag() })); } catch (e) { /* storage full: keep in memory */ }
+}
 function saveQuotaState() {
     if (_quotaSaveTimer) return;
-    _quotaSaveTimer = setTimeout(() => {
-        _quotaSaveTimer = null;
-        try { appStorage.setItem(QUOTA_KEY, JSON.stringify({ ...groqQuota.toJSON(), keyTag: _groqKeyTag() })); } catch (e) { /* storage full: keep in memory */ }
-    }, 1000);
+    _quotaSaveTimer = setTimeout(() => { _quotaSaveTimer = null; _writeQuotaState(); }, 1000);
 }
+// A reload inside the 1 s debounce must not forget a cooldown that was just learned.
+addEventListener('pagehide', () => {
+    if (_quotaSaveTimer) { clearTimeout(_quotaSaveTimer); _quotaSaveTimer = null; _writeQuotaState(); }
+});
 
 class GroqLimitError extends Error {
     constructor(model, waitMs) {
