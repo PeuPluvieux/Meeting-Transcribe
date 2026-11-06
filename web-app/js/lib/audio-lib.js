@@ -112,8 +112,47 @@
         return { push, flush, bufferedSeconds: () => Math.round(frames.length * frameSec * 1000) / 1000 };
     }
 
+    // Phrases Whisper invents on silence/music (YouTube-caption training data). Matched after
+    // normalisation: exact match, or contained when the phrase is long enough to be unambiguous.
+    const HALLUCINATION_PHRASES = [
+        'thank you for watching', 'thanks for watching', 'thank you for watching this video',
+        'please subscribe', 'please like and subscribe', 'subscribe to my channel',
+        'subtitles by the amaraorg community', 'see you in the next video',
+        '字幕由amaraorg社区提供', '字幕由amaraorg社區提供', '請不吝點贊訂閱轉發打賞支持明鏡與點點欄目',
+        '请不吝点赞订阅转发打赏支持明镜与点点栏目', '謝謝觀看', '感謝觀看', '谢谢观看', '字幕志願者', '字幕志愿者',
+        'ご視聴ありがとうございました',
+    ];
+    const _norm = s => String(s || '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+    const _PHRASES = HALLUCINATION_PHRASES.map(_norm);
+
+    function isHallucination(text) {
+        const n = _norm(text);
+        if (!n) return false;
+        return _PHRASES.some(p => n === p || (p.length >= 8 && n.includes(p) && n.length <= p.length + 4));
+    }
+
+    const _CJK = /[　-鿿가-힯＀-￯]/;
+    function filterWhisperResult(data, { noSpeechProb = 0.6 } = {}) {
+        if (!data || typeof data !== 'object') return '';
+        if (!Array.isArray(data.segments)) {
+            const t = String(data.text || '').trim();
+            return isHallucination(t) ? '' : t;
+        }
+        let out = '';
+        for (const s of data.segments) {
+            if (!s || typeof s.text !== 'string') continue;
+            if (Number(s.no_speech_prob) > noSpeechProb) continue;
+            const t = s.text.trim();
+            if (!t || isHallucination(t)) continue;
+            // A space only between two non-CJK sides (Whisper's own zh text has none at CJK joins).
+            const joinTight = _CJK.test(out[out.length - 1] || '') || _CJK.test(t[0]);
+            out += out && !joinTight ? ' ' + t : t;
+        }
+        return out.trim();
+    }
+
     const api = { SAMPLE_RATE, FRAME_SAMPLES, VOICED_RMS, createResampler, floatToInt16, int16ToFloat32,
-        frameRms, encodeWav, createChunker };
+        frameRms, encodeWav, createChunker, HALLUCINATION_PHRASES, isHallucination, filterWhisperResult };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTAudio = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

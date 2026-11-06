@@ -128,3 +128,40 @@ test('chunker: consecutive chunks cover all audio without overlap or loss', () =
     assert.equal(total, 400 * FRAME);
     for (const ch of out) assert.ok(ch.seconds <= 13);
 });
+
+test('isHallucination: known silence phrases, case/punctuation-insensitive', () => {
+    for (const s of ['Thank you for watching!', 'thanks for watching.', '  Please subscribe ',
+        '字幕由Amara.org社区提供', '請不吝點贊 訂閱 轉發 打賞支持明鏡與點點欄目', '謝謝觀看。',
+        'Subtitles by the Amara.org community']) {
+        assert.equal(A.isHallucination(s), true, s);
+    }
+});
+
+test('isHallucination: real meeting speech is kept, including a plain "thank you"', () => {
+    for (const s of ['Thank you, Peter, next slide please.', 'thank you', 'OQC 這邊發現 DPPM 超標',
+        'We watched the subscriber numbers drop', '']) {
+        assert.equal(A.isHallucination(s), false, s);
+    }
+});
+
+test('filterWhisperResult drops high no_speech_prob and phrase segments', () => {
+    const data = { text: 'ignored', segments: [
+        { text: ' Hello team,', no_speech_prob: 0.05 },
+        { text: ' Thanks for watching!', no_speech_prob: 0.2 },
+        { text: ' um', no_speech_prob: 0.9 },
+        { text: ' the yield is 98 percent.', no_speech_prob: 0.6 },
+    ] };
+    assert.equal(A.filterWhisperResult(data), 'Hello team, the yield is 98 percent.');
+});
+
+test('filterWhisperResult falls back to text when there are no segments', () => {
+    assert.equal(A.filterWhisperResult({ text: '  Good morning  ' }), 'Good morning');
+    assert.equal(A.filterWhisperResult({ text: 'Thank you for watching.' }), '');
+    assert.equal(A.filterWhisperResult({}), '');
+    assert.equal(A.filterWhisperResult(null), '');
+});
+
+test('filterWhisperResult joins CJK segments without inserted spaces', () => {
+    const data = { segments: [{ text: '這個 PN 的', no_speech_prob: 0.1 }, { text: 'issue 要處理', no_speech_prob: 0.1 }] };
+    assert.equal(A.filterWhisperResult(data), '這個 PN 的issue 要處理');
+});

@@ -469,9 +469,9 @@ async function transcribeLocalWhisper(blob, startSeconds, gen = _recordingGen) {
 
 function buildWhisperForm(blob, model, sourceLang) {
     const formData = new FormData();
-    formData.append('file', blob, 'audio.webm');
+    formData.append('file', blob, blob.type === 'audio/wav' ? 'audio.wav' : 'audio.webm');
     formData.append('model', model);
-    formData.append('response_format', 'json');
+    formData.append('response_format', 'verbose_json');   // per-segment no_speech_prob for the hallucination filter
     if (sourceLang.includes('+')) {
         formData.append('prompt', 'MiTAC Computing Technology QA/OQC meeting. Conducted in Taiwanese Mandarin (台灣中文) and English. Speakers frequently switch languages mid-sentence. Transcribe ALL speech — use Traditional Chinese characters (繁體中文) for Mandarin, keep English as-is. Preserve these terms exactly: OQC, IPQC, DPPM, MDI, NCR, CAPA, FAI, BMC, iDRAC, PTU, PN, SN, ZOU, HOU. Do not translate. Common patterns: "OQC 這邊發現", "DPPM 超標", "NCR 要開", "這個 PN 的 issue".');
     } else {
@@ -512,7 +512,7 @@ async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AU
                 groqQuota.noteAudio(model, audioSeconds, GROQ_LIMITS.whisper);
                 saveQuotaState();
                 const data = await resp.json();
-                return data.text?.trim() || '';
+                return MTAudio.filterWhisperResult(data);
             }
             const err = await resp.json().catch(() => ({}));
             groqQuota.noteResponse(model, resp.status, h => resp.headers.get(h),
