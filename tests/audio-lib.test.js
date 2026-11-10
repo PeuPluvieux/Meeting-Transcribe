@@ -196,3 +196,59 @@ test('chunker: flush never emits a chunk longer than 13 s (splits in halves, los
     for (const ch of out) assert.ok(ch.seconds <= 13);
     assert.equal(c.bufferedSeconds(), 0);
 });
+
+test('whisperSegments keeps times and applies the same drop rules', () => {
+    const data = { segments: [
+        { start: 0, end: 2.5, text: ' Hello there', no_speech_prob: 0.1, avg_logprob: -0.2 },
+        { start: 2.5, end: 4, text: ' Thank you for watching', no_speech_prob: 0.1, avg_logprob: -0.2 },
+        { start: 4, end: 6, text: ' noise', no_speech_prob: 0.9, avg_logprob: -1.5 },
+        { start: 6, end: 9, text: ' Next topic', no_speech_prob: 0.9, avg_logprob: -0.3 },
+    ] };
+    const dropped = [];
+    const segs = A.whisperSegments(data, { onDrop: (t, why) => dropped.push(why) });
+    assert.deepEqual(segs, [{ start: 0, end: 2.5, text: 'Hello there' }, { start: 6, end: 9, text: 'Next topic' }]);
+    assert.deepEqual(dropped, ['phrase', 'no_speech']);
+});
+
+test('whisperSegments without segments returns one whole-text segment', () => {
+    assert.deepEqual(A.whisperSegments({ text: ' Hi ', duration: 3 }), [{ start: 0, end: 3, text: 'Hi' }]);
+    assert.deepEqual(A.whisperSegments({ text: 'Thanks for watching' }), []);
+    assert.deepEqual(A.whisperSegments(null), []);
+});
+
+test('filterWhisperResult equals joinSegmentText(whisperSegments)', () => {
+    const data = { segments: [{ start: 0, end: 1, text: '我們' }, { start: 1, end: 2, text: 'OQC' }, { start: 2, end: 3, text: 'check it' }] };
+    assert.equal(A.filterWhisperResult(data), A.joinSegmentText(A.whisperSegments(data)));
+    assert.equal(A.filterWhisperResult(data), '我們OQC check it');
+});
+
+test('createTimeline maps offsets across a pause gap', () => {
+    // 30 s record from 0, then (after a pause) a 10 s record starting at meeting time 45 s
+    const tl = A.createTimeline([{ startSeconds: 0, samples: 480000 }, { startSeconds: 45, samples: 160000 }]);
+    assert.equal(tl.totalSeconds, 40);
+    assert.equal(tl.toElapsed(12), 12);
+    assert.equal(tl.toElapsed(30), 45);
+    assert.equal(tl.toElapsed(35.5), 50.5);
+    assert.equal(tl.covers(10), true);
+    assert.equal(tl.covers(40), false);   // inside the pause
+    assert.equal(tl.covers(50), true);
+    assert.equal(tl.covers(60), false);
+});
+
+test('createTimeline with no records', () => {
+    const tl = A.createTimeline([]);
+    assert.equal(tl.totalSeconds, 0);
+    assert.equal(tl.toElapsed(5), 5);
+    assert.equal(tl.covers(0), false);
+});
+
+test('chunker cuts 540-600 s clean-pass windows', () => {
+    const out = [];
+    const c = A.createChunker({ onChunk: ch => out.push(ch), minCutSeconds: 540, maxCutSeconds: 600 });
+    for (let i = 0; i < 6500; i++) c.push(i === 5700 || i === 5701 || i === 5702 ? silent() : loud());   // 650 s, quiet at ~570 s
+    c.flush({ minSeconds: 1 });
+    assert.equal(out.length, 2);
+    assert.ok(out[0].seconds >= 540 && out[0].seconds <= 600);
+    assert.equal(Math.round(out[0].seconds * 10), 5701);   // cut centred on the quiet window
+    assert.equal(Math.round((out[0].seconds + out[1].seconds) * 10), 6500);
+});

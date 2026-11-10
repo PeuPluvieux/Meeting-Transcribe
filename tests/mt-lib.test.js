@@ -165,3 +165,37 @@ test('keyFingerprint: deterministic, distinct, empty-safe, never leaks input', (
     assert.match(MT.keyFingerprint(k), /^[0-9a-f]{8}$/);
     assert.ok(!MT.keyFingerprint(k).includes(k));
 });
+
+test('liveTranscriptOf prefers liveTranscript', () => {
+    const live = [{ id: 0 }], clean = [{ id: 9 }];
+    assert.equal(MTLib.liveTranscriptOf({ transcript: clean, liveTranscript: live }), live);
+    assert.equal(MTLib.liveTranscriptOf({ transcript: live }), live);
+    assert.equal(MTLib.liveTranscriptOf({ transcript: live, liveTranscript: null }), live);
+});
+
+test('hasUserEdits detects speakers and edits', () => {
+    assert.equal(MTLib.hasUserEdits([{ speaker: null }, {}]), false);
+    assert.equal(MTLib.hasUserEdits([{ speaker: 'spk1' }]), true);
+    assert.equal(MTLib.hasUserEdits([{ editedAt: 123 }]), true);
+    assert.equal(MTLib.hasUserEdits(null), false);
+});
+
+test('mapSpeakersByTime takes the speaker of the live segment in effect', () => {
+    const live = [{ startSeconds: 0, speaker: 'a' }, { startSeconds: 20, speaker: null }, { startSeconds: 40, speaker: 'b' }];
+    const clean = [{ startSeconds: 5 }, { startSeconds: 19.5 }, { startSeconds: 25 }, { startSeconds: 39.2 }, { startSeconds: 70 }];
+    assert.deepEqual(MTLib.mapSpeakersByTime(live, clean), ['a', null, null, 'b', 'b']);
+    assert.deepEqual(MTLib.mapSpeakersByTime([], clean), [null, null, null, null, null]);
+});
+
+test('audioRetention rules', () => {
+    const now = Date.parse('2026-11-20T00:00:00Z'), day = 86400000;
+    const R = o => MTLib.audioRetention({ meetingExists: true, cleanDoneAt: null, newestAt: now, now, isRecording: false, ...o });
+    assert.equal(R({}), 'keep');
+    assert.equal(R({ isRecording: true, meetingExists: false, newestAt: now - 30 * day }), 'keep');
+    assert.equal(R({ cleanDoneAt: now - 6 * day }), 'keep');
+    assert.equal(R({ cleanDoneAt: now - 8 * day }), 'delete');
+    assert.equal(R({ newestAt: now - 13 * day }), 'keep');
+    assert.equal(R({ newestAt: now - 15 * day }), 'delete');
+    assert.equal(R({ meetingExists: false, newestAt: now - 2 * 3600000 }), 'keep');
+    assert.equal(R({ meetingExists: false, newestAt: now - 25 * 3600000 }), 'delete');
+});

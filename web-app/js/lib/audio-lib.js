@@ -137,14 +137,16 @@
     }
 
     const _CJK = /[　-鿿가-힯＀-￯]/;
-    function filterWhisperResult(data, { noSpeechProb = 0.6, onDrop = null } = {}) {
-        if (!data || typeof data !== 'object') return '';
+    // Whisper verbose_json -> kept segments with their times. Same drop rules as the live filter.
+    function whisperSegments(data, { noSpeechProb = 0.6, onDrop = null } = {}) {
+        if (!data || typeof data !== 'object') return [];
         if (!Array.isArray(data.segments)) {
             const t = String(data.text || '').trim();
-            if (isHallucination(t)) { if (onDrop && t) onDrop(t, 'phrase'); return ''; }
-            return t;
+            if (!t) return [];
+            if (isHallucination(t)) { if (onDrop) onDrop(t, 'phrase'); return []; }
+            return [{ start: 0, end: Number(data.duration) || 0, text: t }];
         }
-        let out = '';
+        const out = [];
         for (const s of data.segments) {
             if (!s || typeof s.text !== 'string') continue;
             const t = s.text.trim();
@@ -156,6 +158,14 @@
             }
             if (!t) continue;
             if (isHallucination(t)) { if (onDrop) onDrop(t, 'phrase'); continue; }
+            out.push({ start: Number(s.start) || 0, end: Number(s.end) || 0, text: t });
+        }
+        return out;
+    }
+
+    function joinSegmentText(segs) {
+        let out = '';
+        for (const { text: t } of segs || []) {
             // A space only between two non-CJK sides (Whisper's own zh text has none at CJK joins).
             const joinTight = _CJK.test(out[out.length - 1] || '') || _CJK.test(t[0]);
             out += out && !joinTight ? ' ' + t : t;
@@ -163,8 +173,36 @@
         return out.trim();
     }
 
+    function filterWhisperResult(data, opts = {}) {
+        return joinSegmentText(whisperSegments(data, opts));
+    }
+
+    // Stored audio is the concatenation of records; a pause makes a gap in meeting time between two
+    // records. Maps an offset into the concatenated audio back to meeting (elapsed) seconds.
+    function createTimeline(records, sampleRate = SAMPLE_RATE) {
+        const spans = [];
+        let off = 0;
+        for (const r of records || []) {
+            spans.push({ off, start: Number(r.startSeconds) || 0, len: r.samples });
+            off += r.samples;
+        }
+        return {
+            totalSeconds: off / sampleRate,
+            toElapsed(offsetSeconds) {
+                const s = offsetSeconds * sampleRate;
+                let span = null;
+                for (const sp of spans) { if (sp.off <= s) span = sp; else break; }
+                return span ? span.start + (s - span.off) / sampleRate : offsetSeconds;
+            },
+            covers(elapsedSeconds) {
+                return spans.some(sp => elapsedSeconds >= sp.start && elapsedSeconds < sp.start + sp.len / sampleRate);
+            },
+        };
+    }
+
     const api = { SAMPLE_RATE, FRAME_SAMPLES, VOICED_RMS, createResampler, floatToInt16, int16ToFloat32,
-        frameRms, encodeWav, createChunker, HALLUCINATION_PHRASES, isHallucination, filterWhisperResult };
+        frameRms, encodeWav, createChunker, HALLUCINATION_PHRASES, isHallucination, filterWhisperResult,
+        whisperSegments, joinSegmentText, createTimeline };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTAudio = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

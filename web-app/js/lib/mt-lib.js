@@ -131,7 +131,37 @@
         return h.toString(16).padStart(8, '0');
     }
 
-    const api = { keyFingerprint, namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, retryHintFromMessage, parseJsonLoose, groupForMerge, isRetryableGroq400, DRAFT_VERSION, buildDraft, isRecoverableDraft, insertSegmentSorted, rebuildFullTranscript };
+    // The live transcript, whichever view (Live/Clean) is active in meetingData.transcript.
+    function liveTranscriptOf(md) {
+        return Array.isArray(md && md.liveTranscript) ? md.liveTranscript : (md ? md.transcript : []);
+    }
+
+    function hasUserEdits(transcript) {
+        return Array.isArray(transcript) && transcript.some(s => s && (s.speaker != null || s.editedAt));
+    }
+
+    // Speaker labels move to the clean transcript by time: each clean segment takes the label of the
+    // live segment in effect at its start (1 s tolerance for the two transcripts' timing difference).
+    function mapSpeakersByTime(live, clean) {
+        const sorted = (live || []).filter(s => Number.isFinite(s.startSeconds)).sort((a, b) => a.startSeconds - b.startSeconds);
+        return (clean || []).map(c => {
+            let hit = null;
+            for (const l of sorted) { if (l.startSeconds <= c.startSeconds + 1) hit = l; else break; }
+            return hit ? (hit.speaker ?? null) : null;
+        });
+    }
+
+    const DAY_MS = 86400000;
+    function audioRetention({ meetingExists, cleanDoneAt, newestAt, now, isRecording }) {
+        if (isRecording) return 'keep';
+        const age = now - (newestAt || 0);
+        if (!meetingExists) return age > DAY_MS ? 'delete' : 'keep';
+        if (cleanDoneAt && now - cleanDoneAt > 7 * DAY_MS) return 'delete';
+        return age > 14 * DAY_MS ? 'delete' : 'keep';
+    }
+
+    const api = { keyFingerprint, namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, retryHintFromMessage, parseJsonLoose, groupForMerge, isRetryableGroq400, DRAFT_VERSION, buildDraft, isRecoverableDraft, insertSegmentSorted, rebuildFullTranscript,
+        liveTranscriptOf, hasUserEdits, mapSpeakersByTime, audioRetention };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTLib = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
