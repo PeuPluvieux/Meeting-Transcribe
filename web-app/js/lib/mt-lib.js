@@ -154,7 +154,8 @@
     const DAY_MS = 86400000;
     function audioRetention({ meetingExists, cleanDoneAt, newestAt, now, isRecording }) {
         if (isRecording) return 'keep';
-        const age = now - (newestAt || 0);
+        if (!Number.isFinite(newestAt)) return 'keep';
+        const age = now - newestAt;
         if (!meetingExists) return age > DAY_MS ? 'delete' : 'keep';
         if (cleanDoneAt && now - cleanDoneAt > 7 * DAY_MS) return 'delete';
         return age > 14 * DAY_MS ? 'delete' : 'keep';

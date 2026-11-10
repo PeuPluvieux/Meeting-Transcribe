@@ -198,4 +198,6 @@ test('audioRetention rules', () => {
     assert.equal(R({ newestAt: now - 15 * day }), 'delete');
     assert.equal(R({ meetingExists: false, newestAt: now - 2 * 3600000 }), 'keep');
     assert.equal(R({ meetingExists: false, newestAt: now - 25 * 3600000 }), 'delete');
+    assert.equal(R({ newestAt: undefined }), 'keep');
+    assert.equal(R({ meetingExists: false, newestAt: NaN }), 'keep');
 });
