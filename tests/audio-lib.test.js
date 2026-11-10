@@ -252,3 +252,11 @@ test('chunker cuts 540-600 s clean-pass windows', () => {
     assert.equal(Math.round(out[0].seconds * 10), 5701);   // cut centred on the quiet window
     assert.equal(Math.round((out[0].seconds + out[1].seconds) * 10), 6500);
 });
+
+test('localWhisperLanguage: Whisper code for one language, null (auto-detect) for bilingual', () => {
+    assert.strictEqual(A.localWhisperLanguage('en-US'), 'en');
+    assert.strictEqual(A.localWhisperLanguage('zh-TW'), 'zh');
+    assert.strictEqual(A.localWhisperLanguage('zh-TW+en-US'), null);
+    assert.strictEqual(A.localWhisperLanguage(''), null);
+    assert.strictEqual(A.localWhisperLanguage(undefined), null);
+});

@@ -200,9 +200,16 @@
         };
     }
 
+    // Whisper language code for Transformers.js; null = let Whisper detect (bilingual "a+b" mode).
+    function localWhisperLanguage(sourceLang) {
+        const s = String(sourceLang || '');
+        if (!s || s.includes('+')) return null;
+        return s.split('-')[0].toLowerCase() || null;
+    }
+
     const api = { SAMPLE_RATE, FRAME_SAMPLES, VOICED_RMS, createResampler, floatToInt16, int16ToFloat32,
         frameRms, encodeWav, createChunker, HALLUCINATION_PHRASES, isHallucination, filterWhisperResult,
-        whisperSegments, joinSegmentText, createTimeline };
+        whisperSegments, joinSegmentText, createTimeline, localWhisperLanguage };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTAudio = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

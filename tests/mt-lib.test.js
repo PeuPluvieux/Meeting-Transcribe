@@ -217,3 +217,64 @@ test('liveEndSeconds is the last live start + 10 s, or 0', () => {
     assert.equal(MTLib.liveEndSeconds([]), 0);
     assert.equal(MTLib.liveEndSeconds(null), 0);
 });
+
+test('echoTokens: CJK chars are single tokens, Latin words lowercased, punctuation dropped', () => {
+    assert.deepStrictEqual(MTLib.echoTokens('OQC 這邊發現, DPPM 超標!'), ['oqc', '這', '邊', '發', '現', 'dppm', '超', '標']);
+    assert.deepStrictEqual(MTLib.echoTokens('  Hello,   World. '), ['hello', 'world']);
+    assert.deepStrictEqual(MTLib.echoTokens(''), []);
+    assert.deepStrictEqual(MTLib.echoTokens(null), []);
+});
+
+test('echoCoverage: share of mic tokens found in order inside the meeting text', () => {
+    assert.strictEqual(MTLib.echoCoverage('we need to open an NCR', 'Okay so we need to open an NCR for this lot.'), 1);
+    assert.strictEqual(MTLib.echoCoverage('we need open NCR today', 'we need to open an NCR'), 0.8);
+    assert.strictEqual(MTLib.echoCoverage('completely different words here', 'we need to open an NCR'), 0);
+    assert.strictEqual(MTLib.echoCoverage('', 'anything'), 0);
+    assert.ok(Math.abs(MTLib.echoCoverage('DPPM 超標了', 'DPPM 超標') - 3 / 4) < 1e-9);
+});
+
+const seg = (id, source, startSeconds, original, extra = {}) => ({ id, source, startSeconds, original, corrected: null, speaker: null, ...extra });
+
+test('isEcho: mic line repeated by a nearby meeting line is an echo', () => {
+    const tr = [seg(1, 'meeting', 100, 'So the OQC team found three failures on the BMC.')];
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 108, 'the OQC team found three failures'), tr), true);
+});
+
+test('isEcho: window is 20 s back and 5 s ahead of the mic line', () => {
+    const text = 'the OQC team found three failures';
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 121, text), [seg(1, 'meeting', 100, text)]), false); // meeting 21 s earlier
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 120, text), [seg(1, 'meeting', 100, text)]), true);  // exactly 20 s
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 100, text), [seg(1, 'meeting', 105, text)]), true);  // meeting 5 s later
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 100, text), [seg(1, 'meeting', 106, text)]), false);
+});
+
+test('isEcho: sentence straddling two meeting chunks still matches (concatenated)', () => {
+    const tr = [seg(1, 'meeting', 100, 'Next item. The OQC team found'), seg(3, 'meeting', 112, 'three failures on the BMC.')];
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 114, 'the OQC team found three failures'), tr), true);
+});
+
+test('isEcho: never for short, labelled, edited or non-mic lines', () => {
+    const tr = [seg(1, 'meeting', 100, 'yes okay the OQC team found three failures')];
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 105, 'yes okay'), tr), false);                                          // < 3 tokens
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 105, 'the OQC team found', { speaker: 'spk1' }), tr), false);
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 105, 'the OQC team found', { editedAt: 1 }), tr), false);
+    assert.strictEqual(MTLib.isEcho(seg(2, 'meeting', 105, 'the OQC team found'), tr), false);
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 105, 'the OQC team found'), tr.concat([])), true);                      // control
+});
+
+test('isEcho: uses corrected text when present', () => {
+    const tr = [seg(1, 'meeting', 100, 'raw', { corrected: 'open an NCR for this lot' })];
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 104, 'x', { corrected: 'open an NCR' }), tr), true);
+});
+
+test('findEchoes: returns ids of mic lines the new meeting line repeats, ignores the user\'s own speech', () => {
+    const m = seg(10, 'meeting', 100, 'Please send the DPPM report by Friday.');
+    const tr = [
+        seg(4, 'mic', 103, 'please send the DPPM report by Friday'),  // echo
+        seg(5, 'mic', 106, 'sure I will send it tomorrow'),           // the user answering
+        seg(6, 'mic', 60, 'please send the DPPM report by Friday'),   // too early for this meeting line
+        m,
+    ];
+    assert.deepStrictEqual(MTLib.findEchoes(tr, m), [4]);
+    assert.deepStrictEqual(MTLib.findEchoes([], m), []);
+});

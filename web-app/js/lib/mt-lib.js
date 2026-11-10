@@ -175,8 +175,71 @@
         return last === -Infinity ? 0 : last + 10;
     }
 
+    // ==================== ECHO DEDUPE ====================
+    // Without headphones the mic hears the meeting from the speakers, so the same words arrive
+    // twice: from Web Speech (mic) and from Whisper (meeting audio). Tokens: each CJK character
+    // is one token, Latin words are lowercased tokens, punctuation and symbols are dropped.
+    function echoTokens(text) {
+        const s = String(text ?? '').normalize('NFKC').toLowerCase().replace(/[\p{P}\p{S}]+/gu, ' ');
+        const out = [];
+        for (const run of s.split(/\s+/)) {
+            let word = '';
+            for (const ch of run) {
+                if (/\p{Script=Han}/u.test(ch)) { if (word) { out.push(word); word = ''; } out.push(ch); }
+                else word += ch;
+            }
+            if (word) out.push(word);
+        }
+        return out;
+    }
+
+    // Share of the mic tokens that appear, in order, in the meeting text (LCS / mic length).
+    function echoCoverage(micText, meetingText) {
+        const a = echoTokens(micText), b = echoTokens(meetingText);
+        if (!a.length || !b.length) return 0;
+        let prev = new Array(b.length + 1).fill(0);
+        for (let i = 1; i <= a.length; i++) {
+            const cur = new Array(b.length + 1).fill(0);
+            for (let j = 1; j <= b.length; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+            prev = cur;
+        }
+        return prev[b.length] / a.length;
+    }
+
+    // back/ahead: meeting lines starting up to `back` s before or `ahead` s after the mic line.
+    const ECHO_DEFAULTS = Object.freeze({ back: 20, ahead: 5, threshold: 0.8, minTokens: 3 });
+    const _segText = s => (s.corrected || s.original || '');
+
+    function isEcho(micSeg, transcript, opts = {}) {
+        const o = { ...ECHO_DEFAULTS, ...opts };
+        if (!micSeg || micSeg.source !== 'mic' || micSeg.speaker != null || micSeg.editedAt) return false;
+        const t = micSeg.startSeconds;
+        if (!Number.isFinite(t)) return false;
+        const micText = _segText(micSeg);
+        if (echoTokens(micText).length < o.minTokens) return false;
+        const near = (transcript || [])
+            .filter(s => s && s.source === 'meeting' && Number.isFinite(s.startSeconds)
+                && s.startSeconds >= t - o.back && s.startSeconds <= t + o.ahead)
+            .sort((x, y) => x.startSeconds - y.startSeconds);
+        if (!near.length) return false;
+        return echoCoverage(micText, near.map(_segText).join(' ')) >= o.threshold;
+    }
+
+    // Mic lines (already in the transcript) that a newly added meeting line shows were echoes.
+    function findEchoes(transcript, meetingSeg, opts = {}) {
+        const o = { ...ECHO_DEFAULTS, ...opts };
+        if (!meetingSeg || !Number.isFinite(meetingSeg.startSeconds)) return [];
+        const m = meetingSeg.startSeconds;
+        return (transcript || [])
+            .filter(s => s && s.source === 'mic' && Number.isFinite(s.startSeconds)
+                && s.startSeconds >= m - o.ahead && s.startSeconds <= m + o.back
+                && isEcho(s, transcript, o))
+            .map(s => s.id);
+    }
+
     const api = { keyFingerprint, namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, retryHintFromMessage, parseJsonLoose, groupForMerge, isRetryableGroq400, DRAFT_VERSION, buildDraft, isRecoverableDraft, insertSegmentSorted, rebuildFullTranscript,
-        liveTranscriptOf, hasUserEdits, mapSpeakersByTime, audioRetention, cleanCoverage, liveEndSeconds };
+        liveTranscriptOf, hasUserEdits, mapSpeakersByTime, audioRetention, cleanCoverage, liveEndSeconds,
+        echoTokens, echoCoverage, ECHO_DEFAULTS, isEcho, findEchoes };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTLib = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
