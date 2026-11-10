@@ -139,7 +139,12 @@ function addTranscriptSegment(text, source = 'mic', { startSeconds } = {}) {
     const elapsed = Number.isFinite(startSeconds) ? startSeconds : getElapsedSeconds();
     const { seg, displayText } = buildSegment(text, source, elapsed, currentSegmentId++);
     // Echo dedupe: a mic line whose words the meeting audio already delivered is the speakers' echo.
-    if (source === 'mic' && MTLib.isEcho(seg, meetingData.transcript)) { noteEchoRemoved(1); return; }
+    if (source === 'mic' && MTLib.isEcho(seg, meetingData.transcript)) {
+        // The segment id is consumed and _lastAddedText updated on purpose (harmless gaps; the 3 s exact-repeat guard still applies).
+        clearInterimDisplay();
+        noteEchoRemoved(1);
+        return;
+    }
     const globalSrcLang = appStorage.getItem('source_lang') || 'en-US';
 
     meetingData.transcript.push(seg);
@@ -208,6 +213,15 @@ function addTranscriptSegment(text, source = 'mic', { startSeconds } = {}) {
     scheduleDraftSave();
 }
 
+// Clears the gray interim text, its translation preview and any pending preview request.
+function clearInterimDisplay() {
+    if (_interimSpan) { _interimSpan.remove(); _interimSpan = null; }
+    _currentParaTransEl?.querySelector('.interim-trans-span')?.remove();
+    if (interimElement) { interimElement.remove(); interimElement = null; }
+    lastInterimTranslation = '';
+    clearTimeout(interimTranslateTimer);
+}
+
 function displaySegment(seg) {
     const container = document.getElementById('liveTranscript');
     if (!container) return;
@@ -257,8 +271,7 @@ function displaySegment(seg) {
     }
 
     // Remove interim span and its translation preview before appending finalized text
-    if (_interimSpan) { _interimSpan.remove(); _interimSpan = null; }
-    _currentParaTransEl.querySelector('.interim-trans-span')?.remove();
+    clearInterimDisplay();
 
     // Append finalized span inline
     const span = document.createElement('span');
