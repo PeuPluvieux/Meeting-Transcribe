@@ -589,7 +589,7 @@ async function stopRecording() {
         resetAudioQualityMonitor();
         stopDraftHeartbeat();
         writeDraft();                                // final draft before processing
-        await audioStored;
+        await Promise.race([audioStored.catch(() => {}), sleep(10000)]);
         setAppState('processing');
         updateFailedChunksUI();
         await processRecording();

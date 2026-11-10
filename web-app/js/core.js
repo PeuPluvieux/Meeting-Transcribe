@@ -114,6 +114,7 @@ function getAppState() { return appState; }
 function setAppState(newState) {
     appState = newState;
     if (newState === 'idle' || newState === 'done') releaseRecorderLock(); // defined in scheduler.js (call time)
+    if (newState === 'idle' || newState === 'done') { if (typeof stopAudioStore === 'function') stopAudioStore().catch(() => {}); }
     updateRecordingUI();
     // The banner drawn during processing has its buttons disabled; redraw once the app is idle again.
     if ((newState === 'idle' || newState === 'done') && typeof refreshMissingAudioBanner === 'function') refreshMissingAudioBanner();

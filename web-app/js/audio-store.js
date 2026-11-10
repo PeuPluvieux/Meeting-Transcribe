@@ -36,7 +36,7 @@ async function _audioTx(stores, mode, work) {
         let result;
         work(tx, r => { result = r; });
         tx.oncomplete = () => resolve(result);
-        tx.onerror = () => reject(tx.error);
+        tx.onerror = e => reject((e && e.target && e.target.error) || tx.error);
         tx.onabort = () => reject(tx.error || new Error('Audio transaction aborted'));
     });
 }
@@ -84,7 +84,7 @@ async function startAudioStore(meetingId) {
             startSeconds: null, writes: Promise.resolve(), failed: false,
             sourceLang: appStorage.getItem('source_lang') || 'en-US' };
         node.port.onmessage = e => {
-            if (_store !== s || appState !== 'recording' || s.failed) return;
+            if (_store !== s || appState !== 'recording' || s.failed || currentMeetingId !== s.meetingId) return;
             if (s.startSeconds === null) s.startSeconds = getElapsedSeconds();
             const f = new Int16Array(e.data);
             s.frames.push(f);
