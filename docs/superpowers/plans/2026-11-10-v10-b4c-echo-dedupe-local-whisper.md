@@ -11,7 +11,7 @@
 - `addTranscriptSegment` in `recording.js` uses those helpers both ways:
   - A mic line that arrives after its meeting copy is never added.
   - When a meeting line arrives, earlier mic lines it repeats are removed from the transcript, the DOM and the PiP overlay.
-- A module worker, `js/whisper-worker.js`, imports Transformers.js **3.8.1** from jsDelivr. It runs `onnx-community/whisper-small` with `dtype: 'q8'` on WASM and handles one request at a time.
+- A module worker, `js/whisper-worker.js`, imports Transformers.js **3.8.1** from jsDelivr. It runs `onnx-community/whisper-base` with `dtype: 'q8'` on WASM and handles one request at a time.
 - A classic script, `js/local-whisper.js`, owns the worker. It sends Float32 PCM and returns text through `transcribeLocalPcm(pcm, sourceLang)`.
 - `transcribeSystemAudioChunk` in `capture.js` calls the worker when `groqWhisper` throws, as long as both of these hold:
   - the chunk carries PCM;
@@ -51,13 +51,13 @@
   - So the meeting line for the same words starts up to ~16 s earlier. The meeting chunk can also start just after the mic line when an utterance straddles a cut.
 - **Local Whisper constants:**
   - Transformers.js `3.8.1`: `https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js`.
-  - Default model `onnx-community/whisper-small`, `dtype: 'q8'`, `device: 'wasm'`.
+  - Default model `onnx-community/whisper-base`, `dtype: 'q8'`, `device: 'wasm'`.
   - Hidden test override: `appStorage` key `local_whisper_model`, honoured only if it matches `/^onnx-community\/whisper-[a-z0-9.-]+$/`.
   - Request timeout: 120 000 ms once the model is loaded, 600 000 ms before (the first download).
   - At most **3** chunks queued locally, otherwise the chunk goes to the failed queue.
 - **Ruling (vs spec "Local Whisper v3"):** "v3" means the Transformers.js v3 line, not the `whisper-large-v3` model, which is too large for a browser.
   - Pin `3.8.1`, the last 3.x release. The 4.x line is newer, but its API is untested here.
-  - Model `whisper-small` q8 keeps today's ~250 MB download. It is an emergency fallback, and the clean pass re-transcribes the whole meeting with `whisper-large-v3` afterwards.
+  - **Ruling (controller, Task 3 speed test):** default model `whisper-base` q8 (~77 MB). Measured per 12 s chunk on a laptop CPU in Chrome: whisper-small 14.2 s (slower than real time), whisper-base 4.5 s. It is an emergency fallback; the clean pass re-transcribes the whole meeting with `whisper-large-v3` afterwards.
 - **Settings** (via `appStorage`):
   - `local_whisper_fallback` defaults to **on** when the key is absent, and is added to `APP_SETTING_KEYS`.
   - `echo_hint_shown` (`'1'` once the hint was shown) is not a setting and is not in `APP_SETTING_KEYS`.
@@ -630,7 +630,7 @@ Note that the `!groqKey` early return above this block stays. Without a key, the
                         <div class="input-group checkbox-group" style="margin-bottom:8px;">
                             <label style="display:flex;align-items:center;gap:6px;font-size:0.82em;">
                                 <input type="checkbox" id="localWhisperFallback" onchange="saveSettings()">
-                                If Groq is unavailable, transcribe meeting audio on this computer (downloads about 250 MB the first time)
+                                If Groq is unavailable, transcribe meeting audio on this computer (downloads about 80 MB the first time)
                             </label>
                         </div>
 ```
@@ -645,6 +645,8 @@ and next to the `keepMeetingAudio` load line:
 ```
 Check how `keepMeetingAudio` is saved. If it is saved by an explicit Save button and not `onchange`, follow that pattern and drop the `onchange` attribute.
 
+- [ ] **Step 3b: Update the old engine hint** in `index.html` (line ~250): change `Local Whisper downloads ~244 MB once then works offline.` to `Local Whisper downloads about 80 MB once, then works offline.`
+
 - [ ] **Step 4: Version and settings key**
 
 - `core.js`: `const APP_VERSION = '9.14.0';` and append `'local_whisper_fallback'` to `APP_SETTING_KEYS`.
@@ -657,7 +659,7 @@ Add at the top of `BUGLOG.md` (above `## v9.13.0`), in the same style as the v9.
 ```markdown
 ## v9.14.0 (2026-11-10) — B4c echo dedupe + Local Whisper worker
 - **Echo (no headphones):** a mic line whose words the meeting audio already delivered (≥ 80% of its words, in order, within 20 s before / 5 s after) is dropped, or removed when the meeting line arrives later. Labelled or edited lines are never removed. One-time headphones hint.
-- **Local Whisper fallback:** when both Groq Whisper models are unavailable, live meeting-audio chunks are transcribed on the computer (Web Worker, Transformers.js 3.8.1, whisper-small q8) instead of only waiting in "Retry missing audio". At most 3 chunks wait locally; more go to the retry queue. Setting: "If Groq is unavailable, transcribe meeting audio on this computer" (default on).
+- **Local Whisper fallback:** when both Groq Whisper models are unavailable, live meeting-audio chunks are transcribed on the computer (Web Worker, Transformers.js 3.8.1, whisper-base q8) instead of only waiting in "Retry missing audio". At most 3 chunks wait locally; more go to the retry queue. Setting: "If Groq is unavailable, transcribe meeting audio on this computer" (default on).
 - **P5 fixed:** the "Local Whisper" engine no longer runs Transformers.js v2 on the main thread.
 ```
 
