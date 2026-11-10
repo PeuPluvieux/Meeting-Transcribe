@@ -1,13 +1,14 @@
 // ==================== LOCAL WHISPER (worker client) ====================
 // Owns js/whisper-worker.js. Used by the "Local Whisper" engine choice and, when Groq is
 // unavailable, as the last live fallback for meeting-audio chunks (B4c).
-const LOCAL_WHISPER_DEFAULT_MODEL = 'onnx-community/whisper-small';
+const LOCAL_WHISPER_DEFAULT_MODEL = 'onnx-community/whisper-base';
 const LOCAL_WHISPER_MAX_BACKLOG = 3;
+let _lwOutstanding = 0;   // posted to the worker, reply not yet received (includes timed-out requests)
 let _lwWorker = null, _lwSeq = 0, _lwReady = false, _lwLoadingToast = false;
 const _lwPending = new Map();   // id → { resolve, reject, timer }
 
 function localWhisperFallbackEnabled() { return appStorage.getItem('local_whisper_fallback') !== 'false'; }
-function localWhisperBacklog() { return _lwPending.size; }
+function localWhisperBacklog() { return _lwOutstanding; }
 
 function localWhisperModel() {
     const m = appStorage.getItem('local_whisper_model');   // hidden test override (e.g. whisper-tiny)
@@ -17,6 +18,7 @@ function localWhisperModel() {
 function _lwFailAll(message) {
     for (const [id, p] of _lwPending) { clearTimeout(p.timer); p.reject(new Error(message)); }
     _lwPending.clear();
+    _lwOutstanding = 0;
 }
 
 function _lwGetWorker() {
@@ -31,6 +33,10 @@ function _lwGetWorker() {
             if (!_lwReady && _lwLoadingToast) showToast(t('localWhisperReady'), 'success');
             _lwReady = true;
             return;
+        }
+        if (data.id != null && (data.type === 'result' || data.type === 'error')) {
+            _lwOutstanding = Math.max(0, _lwOutstanding - 1);
+            if (data.type === 'error' && !_lwReady) _lwLoadingToast = false;
         }
         const p = _lwPending.get(data.id);
         if (!p) return;                       // timed out earlier
@@ -58,6 +64,7 @@ function transcribeLocalPcm(pcm, sourceLang) {
         _lwPending.set(id, { resolve, reject, timer });
         try {
             _lwGetWorker().postMessage({ id, model: localWhisperModel(), audio, language: MTAudio.localWhisperLanguage(sourceLang) }, [audio.buffer]);
+            _lwOutstanding++;
         } catch (e) { clearTimeout(timer); _lwPending.delete(id); reject(e); }
     }).then(text => (text && !MTAudio.isHallucination(text) ? text : ''));
 }

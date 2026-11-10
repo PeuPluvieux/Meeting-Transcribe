@@ -18,7 +18,7 @@ function getAsr(model) {
             if (p && p.status === 'progress') self.postMessage({ type: 'progress', file: p.file, loaded: p.loaded, total: p.total });
         },
     }).then(p => { asr = p; self.postMessage({ type: 'ready' }); return p; })
-      .catch(e => { loading = null; asrModel = null; throw e; });
+      .catch(e => { if (asrModel === model) { loading = null; asrModel = null; } throw e; });
     return loading;
 }
 
