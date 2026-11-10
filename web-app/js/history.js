@@ -157,6 +157,7 @@ async function confirmDeleteMeeting(id) {
     if (!confirm('Delete this meeting? This cannot be undone.')) return;
     try {
         await removeQueuedChunksForMeeting(id); // first: leftover audio would come back as an orphan meeting
+        await deleteMeetingAudio(id);
         await deleteMeeting(id);
         if (currentMeetingId === id) currentMeetingId = null;
         loadMeetingHistory();

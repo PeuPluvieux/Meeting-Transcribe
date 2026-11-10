@@ -120,6 +120,7 @@ async function autoCleanupMeetings() {
         const toDelete = all.slice(limit);
         for (const m of toDelete) {
             await removeQueuedChunksForMeeting(m.id);   // else its audio would return as an orphan meeting
+            await deleteMeetingAudio(m.id);
             await deleteMeeting(m.id);
         }
         if (toDelete.length) loadMeetingHistory();

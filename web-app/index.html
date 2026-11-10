@@ -394,6 +394,19 @@
                             meetings
                         </label>
                     </div>
+                    <div class="input-group checkbox-group">
+                        <label style="display:flex;align-items:center;gap:6px;">
+                            <input type="checkbox" id="keepMeetingAudio">
+                            Keep meeting audio for a clean transcript (about 115 MB per hour, deleted 7 days after the clean transcript)
+                        </label>
+                    </div>
+                    <div class="input-group checkbox-group">
+                        <label style="display:flex;align-items:center;gap:6px;">
+                            <input type="checkbox" id="cleanPassAuto">
+                            Make the clean transcript automatically after Stop
+                        </label>
+                    </div>
+                    <p class="settings-hint" id="audioStorageUsage"></p>
                 </div>
 
                 <hr class="settings-divider">
@@ -600,28 +613,29 @@
     </div>
     </main>
 
-    <script src="js/lib/mt-lib.js?v=9.12.0" defer></script>
-    <script src="js/lib/quota-lib.js?v=9.12.0" defer></script>
-    <script src="js/lib/audio-lib.js?v=9.12.0" defer></script>
+    <script src="js/lib/mt-lib.js?v=9.13.0" defer></script>
+    <script src="js/lib/quota-lib.js?v=9.13.0" defer></script>
+    <script src="js/lib/audio-lib.js?v=9.13.0" defer></script>
     <!-- Classic scripts, one shared global scope; ORDER MATTERS (tests/load-order.test.js). -->
-    <script src="js/core.js?v=9.12.0" defer></script>
-    <script src="js/scheduler.js?v=9.12.0" defer></script>
-    <script src="js/i18n-prompts.js?v=9.12.0" defer></script>
-    <script src="js/capture.js?v=9.12.0" defer></script>
-    <script src="js/meeting-audio.js?v=9.12.0" defer></script>
-    <script src="js/db.js?v=9.12.0" defer></script>
-    <script src="js/translate.js?v=9.12.0" defer></script>
-    <script src="js/recording.js?v=9.12.0" defer></script>
-    <script src="js/summary.js?v=9.12.0" defer></script>
-    <script src="js/results.js?v=9.12.0" defer></script>
-    <script src="js/settings.js?v=9.12.0" defer></script>
-    <script src="js/overlay.js?v=9.12.0" defer></script>
-    <script src="js/exports.js?v=9.12.0" defer></script>
-    <script src="js/ui-helpers.js?v=9.12.0" defer></script>
-    <script src="js/knowledge.js?v=9.12.0" defer></script>
-    <script src="js/speakers-editing.js?v=9.12.0" defer></script>
-    <script src="js/history.js?v=9.12.0" defer></script>
-    <script src="js/chunk-queue.js?v=9.12.0" defer></script>
-    <script src="js/init.js?v=9.12.0" defer></script>
+    <script src="js/core.js?v=9.13.0" defer></script>
+    <script src="js/scheduler.js?v=9.13.0" defer></script>
+    <script src="js/i18n-prompts.js?v=9.13.0" defer></script>
+    <script src="js/capture.js?v=9.13.0" defer></script>
+    <script src="js/meeting-audio.js?v=9.13.0" defer></script>
+    <script src="js/audio-store.js?v=9.13.0" defer></script>
+    <script src="js/db.js?v=9.13.0" defer></script>
+    <script src="js/translate.js?v=9.13.0" defer></script>
+    <script src="js/recording.js?v=9.13.0" defer></script>
+    <script src="js/summary.js?v=9.13.0" defer></script>
+    <script src="js/results.js?v=9.13.0" defer></script>
+    <script src="js/settings.js?v=9.13.0" defer></script>
+    <script src="js/overlay.js?v=9.13.0" defer></script>
+    <script src="js/exports.js?v=9.13.0" defer></script>
+    <script src="js/ui-helpers.js?v=9.13.0" defer></script>
+    <script src="js/knowledge.js?v=9.13.0" defer></script>
+    <script src="js/speakers-editing.js?v=9.13.0" defer></script>
+    <script src="js/history.js?v=9.13.0" defer></script>
+    <script src="js/chunk-queue.js?v=9.13.0" defer></script>
+    <script src="js/init.js?v=9.13.0" defer></script>
 </body>
 </html>

@@ -496,7 +496,9 @@ async function _startRecordingImpl() {
         console.warn('[Record] mic start failed:', e);
         showToast((e && e.message) || String(e), 'error');
     }
+    if (started) startAudioStore(currentMeetingId);   // not awaited: opens its own mic + worklet, must not delay recording
     if (!started) {
+        stopAudioStore();
         clearDraft();
         setAppState('idle');
         stopTimer();
@@ -506,6 +508,7 @@ async function _startRecordingImpl() {
 
 function pauseRecording() {
     if (appState !== 'recording') return;
+    flushAudioStore();
     flushPcmCapture();   // send the audio up to the pause; nothing is transcribed while paused
 
     if (getMicProvider() === 'gladia') pauseGladiaMic(); else pauseSpeechRecognition();
@@ -553,6 +556,7 @@ async function stopRecording() {
     try {
         stopTimer();                                 // duration = moment Stop was pressed, not after flushing
         if (getMicProvider() === 'gladia') stopGladiaMic(); else stopSpeechRecognition();
+        const audioStored = stopAudioStore();
         showProcessingOverlay(true, t('finishingAudio'));
         await stopSystemAudioCapture({ flush: true });   // D3: last chunk is transcribed, not dropped
         await settleMeetingJobs(30000);              // wait for in-flight chunks (bounded)
@@ -585,6 +589,7 @@ async function stopRecording() {
         resetAudioQualityMonitor();
         stopDraftHeartbeat();
         writeDraft();                                // final draft before processing
+        await audioStored;
         setAppState('processing');
         updateFailedChunksUI();
         await processRecording();

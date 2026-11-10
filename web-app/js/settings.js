@@ -91,6 +91,8 @@ function saveSettings() {
 
     appStorage.setItem('auto_cleanup_enabled', document.getElementById('autoCleanupEnabled')?.checked ? 'true' : 'false');
     appStorage.setItem('auto_cleanup_limit', document.getElementById('autoCleanupLimit')?.value || '10');
+    appStorage.setItem('keep_meeting_audio', document.getElementById('keepMeetingAudio')?.checked ? 'true' : 'false');
+    appStorage.setItem('clean_pass_auto', document.getElementById('cleanPassAuto')?.checked ? 'true' : 'false');
 
     const webhookUrl = document.getElementById('webhookUrl')?.value?.trim() || '';
     if (webhookUrl) appStorage.setItem('webhook_url', webhookUrl);
@@ -144,12 +146,22 @@ function loadSettings() {
     if (document.getElementById('autoCleanupEnabled')) document.getElementById('autoCleanupEnabled').checked = autoCleanup;
     const cleanupLimit = appStorage.getItem('auto_cleanup_limit') || '10';
     if (document.getElementById('autoCleanupLimit')) document.getElementById('autoCleanupLimit').value = cleanupLimit;
+    if (document.getElementById('keepMeetingAudio')) document.getElementById('keepMeetingAudio').checked = appStorage.getItem('keep_meeting_audio') !== 'false';
+    if (document.getElementById('cleanPassAuto')) document.getElementById('cleanPassAuto').checked = appStorage.getItem('clean_pass_auto') !== 'false';
+    refreshAudioStorageUsage();
 
     const webhookUrl = appStorage.getItem('webhook_url') || '';
     if (document.getElementById('webhookUrl')) document.getElementById('webhookUrl').value = webhookUrl;
 
     getKnowledgeBase();
     updateKBStats();
+}
+
+async function refreshAudioStorageUsage() {
+    const el = document.getElementById('audioStorageUsage');
+    if (!el) return;
+    const u = await audioStorageUsage();
+    el.textContent = 'Kept meeting audio: ' + (u.bytes / 1048576).toFixed(0) + ' MB in ' + u.meetings + ' meeting(s).';
 }
 
 // ==================== NEW MEETING ====================
@@ -160,6 +172,7 @@ async function startNewMeeting() {
         flushSpeechBuffer();
         if (getMicProvider() === 'gladia') stopGladiaMic(); else stopSpeechRecognition();
         stopSystemAudioCapture();
+        await stopAudioStore();
         stopTimer();
         meetingData.summaryStatus = 'pending';
         if (await saveCurrentMeeting({ silent: true })) { clearDraft(); showToast(t('previousSaved'), 'success'); }

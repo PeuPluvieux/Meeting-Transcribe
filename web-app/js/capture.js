@@ -379,6 +379,7 @@ async function startSystemAudioCapture() {
         const _abort = () => { audioStream.getTracks().forEach(t => t.stop()); return false; };
         // Stop (or a Stop click) during the picker/start window: never begin capturing afterwards.
         if (!['recording', 'paused'].includes(appState)) return _abort();
+        attachMeetingStreamToStore(audioStream);
         const pcmStarted = await startPcmCapture(audioStream);
         if (pcmStarted === 'aborted' || !['recording', 'paused'].includes(appState)) {
             if (pcmStarted === true) stopPcmCapture();
@@ -409,6 +410,7 @@ async function startSystemAudioCapture() {
 
 // flush=true: transcribe the in-progress chunk (used by Stop). flush=false: discard it.
 function stopSystemAudioCapture({ flush = false } = {}) {
+    detachMeetingStreamFromStore();
     clearInterval(systemAudioChunkTimer); systemAudioChunkTimer = null;
     removeSystemAudioIndicator();
     if (isPcmCaptureActive()) {
