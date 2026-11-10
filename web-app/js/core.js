@@ -8,7 +8,7 @@
 // Leave empty ('') if you want users to enter it in Settings.
 const DEFAULT_GROQ_KEY = '';
 
-const APP_VERSION = '9.13.0';
+const APP_VERSION = '9.14.0';
 
 // ==================== CHANNEL / STORAGE NAMESPACE ====================
 // /beta/ is the same origin as the live app, so it must use separate storage.
@@ -21,7 +21,7 @@ const APP_SETTING_KEYS = ['anthropic_api_key', 'auto_cleanup_enabled', 'auto_cle
     'claude_project_url', 'filler_filter_enabled', 'gemini_api_key', 'gladia_api_key', 'groq_api_key', 'llm_provider',
     'meeting_transcription_provider', 'mic_provider', 'mitac_gpt_url', 'ollama_model', 'openai_api_key', 'source_lang',
     'target_lang', 'theme', 'transcript_display_mode', 'translation_provider', 'ui_lang', 'webhook_url',
-    'meeting_ai_knowledge_base', 'keep_meeting_audio', 'clean_pass_auto'];
+    'meeting_ai_knowledge_base', 'keep_meeting_audio', 'clean_pass_auto', 'local_whisper_fallback'];
 
 // ==================== DEV / TEST PARAMS ====================
 // ?replay            — "Add Meeting Audio" plays a local audio file instead of screen-share

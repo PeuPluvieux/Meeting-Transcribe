@@ -92,6 +92,7 @@ function saveSettings() {
     appStorage.setItem('auto_cleanup_enabled', document.getElementById('autoCleanupEnabled')?.checked ? 'true' : 'false');
     appStorage.setItem('auto_cleanup_limit', document.getElementById('autoCleanupLimit')?.value || '10');
     appStorage.setItem('keep_meeting_audio', document.getElementById('keepMeetingAudio')?.checked ? 'true' : 'false');
+    appStorage.setItem('local_whisper_fallback', document.getElementById('localWhisperFallback')?.checked ? 'true' : 'false');
     appStorage.setItem('clean_pass_auto', document.getElementById('cleanPassAuto')?.checked ? 'true' : 'false');
 
     const webhookUrl = document.getElementById('webhookUrl')?.value?.trim() || '';
@@ -147,6 +148,7 @@ function loadSettings() {
     const cleanupLimit = appStorage.getItem('auto_cleanup_limit') || '10';
     if (document.getElementById('autoCleanupLimit')) document.getElementById('autoCleanupLimit').value = cleanupLimit;
     if (document.getElementById('keepMeetingAudio')) document.getElementById('keepMeetingAudio').checked = appStorage.getItem('keep_meeting_audio') !== 'false';
+    if (document.getElementById('localWhisperFallback')) document.getElementById('localWhisperFallback').checked = appStorage.getItem('local_whisper_fallback') !== 'false';
     if (document.getElementById('cleanPassAuto')) document.getElementById('cleanPassAuto').checked = appStorage.getItem('clean_pass_auto') !== 'false';
     refreshAudioStorageUsage();
 

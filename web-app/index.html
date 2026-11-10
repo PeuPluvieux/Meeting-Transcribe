@@ -247,7 +247,13 @@
                                 <option value="groq">Groq Whisper (Free API key — fastest)</option>
                                 <option value="local">Local Whisper (No API key — runs in browser)</option>
                             </select>
-                            <p class="settings-hint">Local Whisper downloads ~244 MB once then works offline. Groq is faster with a free key.</p>
+                            <p class="settings-hint">Local Whisper downloads about 80 MB once, then works offline. Groq is faster with a free key.</p>
+                        </div>
+                        <div class="input-group checkbox-group" style="margin-bottom:8px;">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:0.82em;">
+                                <input type="checkbox" id="localWhisperFallback">
+                                If Groq is unavailable, transcribe meeting audio on this computer (downloads about 80 MB the first time)
+                            </label>
                         </div>
                         <div style="margin-top:4px;">
                             <details>
@@ -622,31 +628,31 @@
     </div>
     </main>
 
-    <script src="js/lib/mt-lib.js?v=9.13.0" defer></script>
-    <script src="js/lib/quota-lib.js?v=9.13.0" defer></script>
-    <script src="js/lib/audio-lib.js?v=9.13.0" defer></script>
+    <script src="js/lib/mt-lib.js?v=9.14.0" defer></script>
+    <script src="js/lib/quota-lib.js?v=9.14.0" defer></script>
+    <script src="js/lib/audio-lib.js?v=9.14.0" defer></script>
     <!-- Classic scripts, one shared global scope; ORDER MATTERS (tests/load-order.test.js). -->
-    <script src="js/core.js?v=9.13.0" defer></script>
-    <script src="js/scheduler.js?v=9.13.0" defer></script>
-    <script src="js/i18n-prompts.js?v=9.13.0" defer></script>
-    <script src="js/capture.js?v=9.13.0" defer></script>
-    <script src="js/local-whisper.js?v=9.13.0" defer></script>
-    <script src="js/meeting-audio.js?v=9.13.0" defer></script>
-    <script src="js/audio-store.js?v=9.13.0" defer></script>
-    <script src="js/db.js?v=9.13.0" defer></script>
-    <script src="js/translate.js?v=9.13.0" defer></script>
-    <script src="js/recording.js?v=9.13.0" defer></script>
-    <script src="js/summary.js?v=9.13.0" defer></script>
-    <script src="js/results.js?v=9.13.0" defer></script>
-    <script src="js/settings.js?v=9.13.0" defer></script>
-    <script src="js/overlay.js?v=9.13.0" defer></script>
-    <script src="js/exports.js?v=9.13.0" defer></script>
-    <script src="js/ui-helpers.js?v=9.13.0" defer></script>
-    <script src="js/knowledge.js?v=9.13.0" defer></script>
-    <script src="js/speakers-editing.js?v=9.13.0" defer></script>
-    <script src="js/history.js?v=9.13.0" defer></script>
-    <script src="js/chunk-queue.js?v=9.13.0" defer></script>
-    <script src="js/clean-pass.js?v=9.13.0" defer></script>
-    <script src="js/init.js?v=9.13.0" defer></script>
+    <script src="js/core.js?v=9.14.0" defer></script>
+    <script src="js/scheduler.js?v=9.14.0" defer></script>
+    <script src="js/i18n-prompts.js?v=9.14.0" defer></script>
+    <script src="js/capture.js?v=9.14.0" defer></script>
+    <script src="js/local-whisper.js?v=9.14.0" defer></script>
+    <script src="js/meeting-audio.js?v=9.14.0" defer></script>
+    <script src="js/audio-store.js?v=9.14.0" defer></script>
+    <script src="js/db.js?v=9.14.0" defer></script>
+    <script src="js/translate.js?v=9.14.0" defer></script>
+    <script src="js/recording.js?v=9.14.0" defer></script>
+    <script src="js/summary.js?v=9.14.0" defer></script>
+    <script src="js/results.js?v=9.14.0" defer></script>
+    <script src="js/settings.js?v=9.14.0" defer></script>
+    <script src="js/overlay.js?v=9.14.0" defer></script>
+    <script src="js/exports.js?v=9.14.0" defer></script>
+    <script src="js/ui-helpers.js?v=9.14.0" defer></script>
+    <script src="js/knowledge.js?v=9.14.0" defer></script>
+    <script src="js/speakers-editing.js?v=9.14.0" defer></script>
+    <script src="js/history.js?v=9.14.0" defer></script>
+    <script src="js/chunk-queue.js?v=9.14.0" defer></script>
+    <script src="js/clean-pass.js?v=9.14.0" defer></script>
+    <script src="js/init.js?v=9.14.0" defer></script>
 </body>
 </html>

@@ -1,5 +1,10 @@
 # Bug Log
 
+## v9.14.0 (2026-11-10) — B4c echo dedupe + Local Whisper worker
+- **Echo (no headphones):** a mic line whose words the meeting audio already delivered (≥ 80% of its words, in order, within 20 s before / 5 s after) is dropped, or removed when the meeting line arrives later. Labelled or edited lines are never removed. One-time headphones hint.
+- **Local Whisper fallback:** when both Groq Whisper models are unavailable, live meeting-audio chunks are transcribed on the computer (Web Worker, Transformers.js 3.8.1, whisper-base q8) instead of only waiting in "Retry missing audio". At most 3 chunks wait locally; more go to the retry queue. Setting: "If Groq is unavailable, transcribe meeting audio on this computer" (default on).
+- **P5 fixed:** the "Local Whisper" engine no longer runs Transformers.js v2 on the main thread.
+
 ## v9.13.0 (2026-11-10) — B4b audio store + clean pass
 | ID | Bug | Root cause | Fix |
 |---|---|---|---|

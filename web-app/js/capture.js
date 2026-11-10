@@ -580,6 +580,14 @@ async function retryFailedChunks({ quiet = false, deadlineMs = Infinity, undone 
     if (!quiet) showToast(failedMeetingChunks.length ? t('chunksStillFailing').replace('{n}', failedMeetingChunks.length) : t('chunksRecovered'), failedMeetingChunks.length ? 'warning' : 'success');
 }
 
+// One toast per recording when the live transcript starts coming from Local Whisper.
+let _localFallbackNotedGen = -1;
+function noteLocalFallback(gen) {
+    if (_localFallbackNotedGen === gen) return;
+    _localFallbackNotedGen = gen;
+    showToast(t('localFallbackOn'), 'warning');
+}
+
 function transcribeSystemAudioChunk(blob, startSeconds, { audioSeconds = SYSTEM_AUDIO_CHUNK_MS / 1000, pcm = null } = {}) {
     removeSystemAudioIndicator();
     const gen = _recordingGen;
@@ -596,6 +604,15 @@ function transcribeSystemAudioChunk(blob, startSeconds, { audioSeconds = SYSTEM_
     // also land in the transcript (Retry Missing Audio would add it a second time).
     const chunk = { blob, startSeconds, gen, audioSeconds, queued: false, lateText: null };
     const job = groqWhisper(blob, groqKey, sourceLang, { audioSeconds })
+        .catch(e => {
+            // Last live fallback (spec §2.2): Groq is resting/offline/failing → transcribe on this computer.
+            // Skip it when Stop already queued the audio, the meeting changed, or the worker is backed up.
+            if (!pcm || !localWhisperFallbackEnabled() || gen !== _recordingGen || chunk.queued
+                || localWhisperBacklog() >= LOCAL_WHISPER_MAX_BACKLOG) throw e;
+            console.warn('[Groq Whisper] unavailable, using Local Whisper:', e.message);
+            noteLocalFallback(gen);
+            return transcribeLocalPcm(pcm, sourceLang);
+        })
         .then(text => {
             if (!text || gen !== _recordingGen) return;
             if (chunk.queued) { chunk.lateText = text; return; }   // Stop adds it back if storing failed
