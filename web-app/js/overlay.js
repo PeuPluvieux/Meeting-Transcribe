@@ -53,6 +53,26 @@ function pushOverlayCaption(text, segId) {
     }
 }
 
+// Echo dedupe removes mic lines that were already shown; drop them from the captions too.
+// refreshPiPCaptions() only rewrites existing nodes by index, so rebuild the PiP lines here.
+function removeOverlayCaptions(segIds) {
+    if (!segIds?.length) return;
+    const drop = new Set(segIds);
+    const before = overlayLines.length;
+    overlayLines = overlayLines.filter(x => !drop.has(x.segId));
+    if (overlayLines.length === before) return;
+    if (!pipWindow || pipWindow.closed || !pipCaptionEl) return;
+    pipCaptionEl.querySelectorAll('.pip-line').forEach(el => el.remove());
+    overlayLines.forEach((item, i) => {
+        const d = pipWindow.document.createElement('div');
+        d.className = 'pip-line';
+        if (i === overlayLines.length - 1) d.classList.add('pip-latest');
+        else if (i === overlayLines.length - 2) d.classList.add('pip-recent');
+        d.textContent = getOverlayLineText(item);
+        pipCaptionEl.appendChild(d);
+    });
+}
+
 let pipFontLevel = 0;
 const PIP_FONTS = ['16px', '20px', '24px'];
 

@@ -138,12 +138,18 @@ function addTranscriptSegment(text, source = 'mic', { startSeconds } = {}) {
     _lastAddedAt = now;
     const elapsed = Number.isFinite(startSeconds) ? startSeconds : getElapsedSeconds();
     const { seg, displayText } = buildSegment(text, source, elapsed, currentSegmentId++);
+    // Echo dedupe: a mic line whose words the meeting audio already delivered is the speakers' echo.
+    if (source === 'mic' && MTLib.isEcho(seg, meetingData.transcript)) { noteEchoRemoved(1); return; }
     const globalSrcLang = appStorage.getItem('source_lang') || 'en-US';
 
     meetingData.transcript.push(seg);
     meetingData.fullTranscript += displayText + ' ';
     pushOverlayCaption(displayText, seg.id);
     displaySegment(seg);
+    if (source === 'meeting') {
+        const echoes = MTLib.findEchoes(meetingData.transcript, seg);
+        if (echoes.length) noteEchoRemoved(removeTranscriptSegments(echoes));
+    }
 
     const tgtLang = appStorage.getItem('target_lang') || 'en';
     const srcLang = seg.language || globalSrcLang;
@@ -275,6 +281,35 @@ function displaySegment(seg) {
 
     const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
     if (nearBottom) container.scrollTop = container.scrollHeight;
+}
+
+// Removes segments (echo dedupe) from the data, the live view and the PiP captions.
+function removeTranscriptSegments(ids) {
+    if (!ids?.length) return 0;
+    const drop = new Set(ids);
+    const before = meetingData.transcript.length;
+    meetingData.transcript = meetingData.transcript.filter(s => !drop.has(s.id));
+    const removed = before - meetingData.transcript.length;
+    if (!removed) return 0;
+    for (const id of drop) {
+        const span = document.getElementById('seg-' + id);
+        const para = span?.closest('.para-group');
+        span?.remove();
+        document.getElementById('trans-' + id)?.remove();
+        // Drop a paragraph left empty, unless new text is still being appended to it.
+        if (para && para !== _currentParaGroup && !para.querySelector('.final-span')) para.remove();
+    }
+    removeOverlayCaptions(ids);
+    meetingData.fullTranscript = MTLib.rebuildFullTranscript(meetingData.transcript);
+    scheduleDraftSave();
+    return removed;
+}
+
+function noteEchoRemoved(count) {
+    console.debug('[Echo] removed ' + count + ' duplicate mic line(s)');
+    if (appStorage.getItem('echo_hint_shown') === '1') return;
+    appStorage.setItem('echo_hint_shown', '1');
+    showToast(t('echoHint'), 'info');
 }
 
 function updateInterimTranscript(text) {

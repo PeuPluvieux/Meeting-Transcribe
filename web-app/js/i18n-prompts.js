@@ -84,6 +84,7 @@ const UI_STRINGS = {
         deleteAudio: 'Delete Audio ({mb} MB)',
         deleteAudioConfirm: 'Delete this meeting\'s kept audio? The transcripts stay, but the clean transcript can no longer be made or redone.',
         summaryFromClean: '↻ Update Summary From Clean Transcript',
+        echoHint: 'Removed a duplicate line: your mic was picking up the meeting from your speakers. Headphones give a cleaner transcript.',
     },
     'zh-TW': {
         headerTitle: 'AI 會議記錄',
@@ -169,6 +170,7 @@ const UI_STRINGS = {
         deleteAudio: '刪除錄音（{mb} MB）',
         deleteAudioConfirm: '要刪除本次會議保留的錄音嗎？逐字稿會保留，但將無法再產生或重做精修逐字稿。',
         summaryFromClean: '↻ 以精修逐字稿更新摘要',
+        echoHint: '已移除重複的句子：麥克風收到了喇叭播放的會議聲音。戴耳機可獲得更乾淨的逐字稿。',
     }
 };
 
