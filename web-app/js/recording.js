@@ -70,7 +70,8 @@ async function recoverDraft({ quiet = false } = {}) {
     meetingData = { transcript: d.meetingData.transcript, bookmarks: d.meetingData.bookmarks || [],
         fullTranscript: d.meetingData.fullTranscript || '', summary: '', keyPoints: [], keyDecisions: [],
         actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null,
-        summaryStatus: 'pending', summaryError: null };
+        summaryStatus: 'pending', summaryError: null,
+        cleanPass: null, cleanTranscript: null, liveTranscript: null, transcriptView: 'live', summarySource: null };
     currentSegmentId = d.currentSegmentId || meetingData.transcript.length;
     currentMeetingId = d.id;
     speakers = d.speakers || {};
@@ -463,7 +464,8 @@ async function _startRecordingImpl() {
     // Lock before any state is touched: a refused start must not wipe the done meeting or the live transcript.
     if (!(await acquireRecorderLock())) { showToast(t('otherTabRecording'), 'warning'); return; }
     if (appState === 'done') {
-        meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
+        meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null,
+            cleanPass: null, cleanTranscript: null, liveTranscript: null, transcriptView: 'live', summarySource: null };
         currentSegmentId = 0; currentMeetingId = null;
         _lastAddedText = ''; _lastAddedAt = 0;
     }
@@ -485,6 +487,7 @@ async function _startRecordingImpl() {
     startDraftHeartbeat();
     setAppState('recording');
     refreshMissingAudioBanner(); // hide the previous meeting's banner
+    refreshCleanPassUI();
     startTimer();
     const badge = document.getElementById('micBadge');
     if (badge) badge.style.display = 'inline-flex';

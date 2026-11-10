@@ -119,6 +119,7 @@ function setAppState(newState) {
     updateRecordingUI();
     // The banner drawn during processing has its buttons disabled; redraw once the app is idle again.
     if ((newState === 'idle' || newState === 'done') && typeof refreshMissingAudioBanner === 'function') refreshMissingAudioBanner();
+    if ((newState === 'idle' || newState === 'done') && typeof refreshCleanPassUI === 'function') refreshCleanPassUI();
 }
 
 // ==================== RECORDING VARS ====================

@@ -466,6 +466,15 @@
                     <button class="btn btn-small btn-primary" id="missingAudioRetryBtn" onclick="retryQueuedChunksForCurrent()"></button>
                     <button class="btn btn-small btn-ghost" id="missingAudioDiscardBtn" onclick="discardQueuedChunksForCurrent()"></button>
                 </div>
+                <div class="clean-pass-bar" id="cleanPassBar" style="display:none">
+                    <div class="view-toggle" id="transcriptViewToggle" style="display:none">
+                        <button class="btn btn-small" id="viewLiveBtn" onclick="setTranscriptView('live')"></button>
+                        <button class="btn btn-small" id="viewCleanBtn" onclick="setTranscriptView('clean')"></button>
+                    </div>
+                    <span id="cleanPassText"></span>
+                    <button class="btn btn-small btn-primary" id="cleanPassRunBtn" style="display:none" onclick="runCleanPassForCurrent()"></button>
+                    <button class="btn btn-small btn-ghost" id="deleteAudioBtn" style="display:none" onclick="deleteAudioForCurrent()"></button>
+                </div>
                 <div class="content-body" id="transcriptContent"></div>
             </div>
             <div class="tab-content" id="summaryTab" style="display:none;">

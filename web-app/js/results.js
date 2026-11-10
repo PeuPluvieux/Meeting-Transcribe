@@ -103,11 +103,14 @@ function displayResults() {
         const st = meetingData.summaryStatus;
         // Nothing to summarise yet (all audio is waiting in the queue): the missing-audio banner leads instead.
         const hasText = meetingData.transcript.length > 0;
-        retryBtn.style.display = hasText && (st === 'failed' || st === 'pending') ? '' : 'none';
-        retryBtn.textContent = st === 'pending' ? t('runSummary') : t('retrySummary');
+        // A summary made from the live transcript while the clean one is shown can be redone from it.
+        const fromLive = st === 'done' && meetingData.transcriptView === 'clean' && meetingData.summarySource !== 'clean';
+        retryBtn.style.display = hasText && (st === 'failed' || st === 'pending' || fromLive) ? '' : 'none';
+        retryBtn.textContent = fromLive ? t('summaryFromClean') : st === 'pending' ? t('runSummary') : t('retrySummary');
     }
     document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
     refreshMissingAudioBanner();
+    refreshCleanPassUI();
 }
 
 function _bookmarkMarkerHTML(bk) {
@@ -169,3 +172,87 @@ function showTab(tabName, btnEl) {
     if (btnEl) btnEl.classList.add('active');
 }
 
+
+// ==================== LIVE / CLEAN TRANSCRIPT ====================
+function setTranscriptView(view) {
+    const md = meetingData;
+    const live = MTLib.liveTranscriptOf(md);
+    if (view === 'clean') {
+        if (!Array.isArray(md.cleanTranscript) || !md.cleanTranscript.length) return;
+        const spk = MTLib.mapSpeakersByTime(live, md.cleanTranscript);
+        if (spk) md.cleanTranscript.forEach((s, i) => { if (s.speaker == null && spk[i] != null) s.speaker = spk[i]; });
+        md.liveTranscript = live;
+        md.transcript = md.cleanTranscript;
+    } else {
+        md.liveTranscript = live;
+        md.transcript = live;
+    }
+    md.transcriptView = view;
+    md.fullTranscript = MTLib.rebuildFullTranscript(md.transcript);
+    currentSegmentId = md.transcript.reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
+    if (typeof cancelEditing === 'function') cancelEditing();
+    md.citations = null;
+    if (md.keyPoints?.length || md.actionItems?.length) { try { buildCitations(); } catch (e) { /* ignore */ } }
+    displayResults();
+    saveCurrentMeeting({ silent: true, allowEmpty: true });
+}
+
+// Clean pass finished for the meeting on screen.
+function onCleanTranscriptReady() {
+    const live = MTLib.liveTranscriptOf(meetingData);
+    if (!MTLib.hasUserEdits(live)) {
+        setTranscriptView('clean');
+        showToast(t('cleanReady'), 'success');
+        // Nothing was summarised yet (the live transcript was empty): summarise the clean one.
+        if (!live.length && meetingData.summaryStatus === 'pending' && !_summaryInFlight) retrySummary();
+    } else {
+        showToast(t('cleanReadyEdited'), 'info');
+        refreshCleanPassUI();
+    }
+}
+
+async function deleteAudioForCurrent() {
+    const id = currentMeetingId;
+    if (!id || isCleanPassRunning(id)) return;
+    if (!confirm(t('deleteAudioConfirm'))) return;
+    await deleteMeetingAudio(id);
+    refreshCleanPassUI();
+}
+
+const _fmtMin = s => Math.max(0, Math.round(s / 60));
+
+async function refreshCleanPassUI() {
+    const bar = document.getElementById('cleanPassBar');
+    if (!bar) return;
+    const id = currentMeetingId;
+    if (!id || !['idle', 'done'].includes(appState)) { bar.style.display = 'none'; return; }
+    const md = meetingData, cp = md.cleanPass;
+    const { seconds, bytes } = await getAudioSummary(id);
+    if (currentMeetingId !== id || !['idle', 'done'].includes(appState)) return;   // another meeting opened / recording began meanwhile
+    const hasClean = Array.isArray(md.cleanTranscript) && md.cleanTranscript.length > 0;
+    if (!hasClean && !cp && seconds < 1) { bar.style.display = 'none'; return; }
+    bar.style.display = 'flex';
+    const toggle = document.getElementById('transcriptViewToggle');
+    toggle.style.display = hasClean ? '' : 'none';
+    const liveBtn = document.getElementById('viewLiveBtn'), cleanBtn = document.getElementById('viewCleanBtn');
+    liveBtn.textContent = t('viewLive'); cleanBtn.textContent = t('viewClean');
+    liveBtn.classList.toggle('active', md.transcriptView !== 'clean');
+    cleanBtn.classList.toggle('active', md.transcriptView === 'clean');
+    const running = isCleanPassRunning(id);
+    let text = '', runLabel = '';
+    if (cp?.status === 'done') text = md.transcriptView === 'clean' ? t('cleanShowing') : t('cleanAvailableSwitch');
+    else if (running || cp?.status === 'running') text = t('cleanRunning').replace('{done}', _fmtMin(cp?.doneSeconds || 0)).replace('{total}', _fmtMin(cp?.totalSeconds || seconds));
+    else if (cp?.status === 'pending') text = t('cleanQueued');
+    else if (cp?.status === 'waiting') { text = t('cleanWaiting') + ' ' + (cp.error || ''); runLabel = t('cleanRetry'); }
+    else if (cp?.status === 'failed') { text = t('cleanFailed') + ' ' + (cp.error || ''); runLabel = t('cleanRetry'); }
+    else if (seconds >= 1) { text = t('cleanOffer'); runLabel = t('cleanRun'); }
+    if (running) runLabel = '';
+    if (runLabel && seconds < 1) runLabel = '';   // audio is gone: nothing to re-run
+    document.getElementById('cleanPassText').textContent = text;
+    const runBtn = document.getElementById('cleanPassRunBtn');
+    runBtn.style.display = runLabel ? '' : 'none';
+    runBtn.textContent = runLabel;
+    const delBtn = document.getElementById('deleteAudioBtn');
+    delBtn.style.display = seconds >= 1 && !running ? '' : 'none';
+    delBtn.textContent = t('deleteAudio').replace('{mb}', Math.max(1, Math.round(bytes / 1048576)));
+}

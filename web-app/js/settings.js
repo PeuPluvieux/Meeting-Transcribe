@@ -188,7 +188,8 @@ async function startNewMeeting() {
         }
     }
 
-    meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null };
+    meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null,
+        cleanPass: null, cleanTranscript: null, liveTranscript: null, transcriptView: 'live', summarySource: null };
     currentSegmentId = 0;
     interimElement = null;
     _lastAddedText = '';

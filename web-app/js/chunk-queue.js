@@ -191,19 +191,22 @@ async function _retryQueuedChunks(meetingId) {
             const live = currentMeetingId === meetingId && ['idle', 'done'].includes(appState);
             if (live) {
                 const md = meetingData;   // the object we insert into; a meeting switch during the save replaces meetingData
-                let nextId = md.transcript.reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
+                const liveArr = MTLib.liveTranscriptOf(md);
+                let nextId = liveArr.reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
                 const newIds = new Set();
                 for (const r of results) {
                     const { seg } = buildSegment(r.text, 'meeting', r.item.startSeconds, nextId++);
                     seg.translated = r.translated;
                     newIds.add(seg.id);
-                    MTLib.insertSegmentSorted(md.transcript, seg);
+                    MTLib.insertSegmentSorted(liveArr, seg);
                 }
                 currentSegmentId = Math.max(currentSegmentId, nextId);
                 md.fullTranscript = MTLib.rebuildFullTranscript(md.transcript);
                 const saved = await saveCurrentMeeting({ silent: true, allowEmpty: true });
                 if (!saved) {   // roll the in-memory insert back so a later Retry does not duplicate it
-                    md.transcript = md.transcript.filter(s => !newIds.has(s.id));
+                    const filtered = liveArr.filter(s => !newIds.has(s.id));
+                    if (md.liveTranscript === liveArr) md.liveTranscript = filtered;
+                    if (md.transcript === liveArr) md.transcript = filtered;
                     md.fullTranscript = MTLib.rebuildFullTranscript(md.transcript);
                     abort = true; return;
                 }   // saveCurrentMeeting already toasted; queue kept

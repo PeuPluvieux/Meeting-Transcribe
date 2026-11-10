@@ -1,10 +1,18 @@
 # Bug Log
 
+## v9.13.0 (2026-11-10) — B4b audio store + clean pass
+| ID | Bug | Root cause | Fix |
+|---|---|---|---|
+| P4/B4b-1 | Meeting audio was thrown away, so a bad live transcript could never be redone | Audio only lived in 12 s chunks that were sent to Groq and discarded | Mic + meeting mix kept in a separate DB (`MeetingNotesAI-audio`) with retention and a Delete Audio button |
+| B4b-2 | Live 12 s chunks cut sentences and lacked context | Live transcription favours speed over accuracy | Clean pass re-transcribes the kept audio with whisper-large-v3 in windows; resumable after reload or the Groq free limit |
+| B4b-3 | No way to compare or use the better transcript | One transcript field held everything | Live \| Clean view toggle; live edits are kept; speaker labels are mapped onto the clean transcript by time; summary can be redone from the clean one |
+| B4b-4 | Retry Missing Audio could add text the clean pass already covers, or insert into the clean view | Retry inserted into `meetingData.transcript` (active view) | Queue entries covered by the clean pass are dropped; recovered text goes into the live transcript, rollback restores the same field |
+
 ## v9.12.0 (2026-11-06) — B4a live audio pipeline
 | ID | Bug | Root cause | Fix |
 |---|---|---|---|
 | D4 | Words cut at every 12 s boundary | MediaRecorder stop → 200 ms gap → restart on a timer | AudioWorklet PCM frames; chunk cut at the quietest 300 ms between 10 and 13 s; no gap |
-| A1 | Whisper invented "Thank you for watching" / 字幕由… on silence, and silence used Groq quota | Every 12 s chunk was sent, silent or not; `json` responses carry no confidence | Silence gate (≥ 3 frames ≥ −45 dBFS); `verbose_json` + drop `no_speech_prob > 0.6` and known phrases |
+| A1 | Whisper invented "Thank you for watching" / 字幕由… on silence, and silence used Groq quota | Every 12 s chunk was sent, silent or not; `json` responses carry no confidence | Silence gate (≥ 3 frames ≥ −45 dBFS); `verbose_json` + drop a segment when `no_speech_prob > 0.6` **and** `avg_logprob < −1.0`, or when it matches the known-phrase list |
 | A2 | Chunk timing drifted in a hidden tab | `setInterval` rotation is throttled in background tabs | Chunking counts audio frames, not timers |
 | P5 (partial) | Local Whisper got raw webm bytes | Transformers.js needs decoded 16 kHz Float32 | WAV chunks pass their PCM as Float32 (worker + v3 model still B4c) |
 

@@ -89,9 +89,15 @@ async function loadMeetingFromHistory(id) {
             cleanPass: meeting.cleanPass || null,
             cleanTranscript: meeting.cleanTranscript || null,
             liveTranscript: meeting.transcript || [],
-            transcriptView: 'live',   // Task 4 applies meeting.transcriptView
+            transcriptView: 'live',
             summarySource: meeting.summarySource || null
         };
+        if (meeting.transcriptView === 'clean' && Array.isArray(meeting.cleanTranscript) && meeting.cleanTranscript.length) {
+            meetingData.transcript = meeting.cleanTranscript;
+            meetingData.transcriptView = 'clean';
+            meetingData.fullTranscript = MTLib.rebuildFullTranscript(meetingData.transcript);
+            currentSegmentId = meetingData.transcript.reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
+        }
         displayResults();
         closeHistorySidebar();
         if (meeting.duration) document.getElementById('timer').textContent = meeting.duration;

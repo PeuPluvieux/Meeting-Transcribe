@@ -40,7 +40,7 @@ async function _drainCleanQueue() {
 
 // Updates the shown meeting first (so a concurrent saveCurrentMeeting carries the new state), then the DB.
 async function _patchClean(id, cleanPass, extra = {}) {
-    if (currentMeetingId === id) { meetingData.cleanPass = cleanPass; Object.assign(meetingData, extra); }
+    if (currentMeetingId === id) { meetingData.cleanPass = cleanPass ? { ...cleanPass, segments: (cleanPass.segments || []).slice() } : null; Object.assign(meetingData, extra); }
     _refreshCleanUI();
     return patchMeeting(id, m => { m.cleanPass = cleanPass; Object.assign(m, extra); });
 }
