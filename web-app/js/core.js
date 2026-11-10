@@ -97,6 +97,7 @@ async function getReplayStream() {
 // Groq IDs verified against GET /openai/v1/models on 2026-10-29 (see Task 5 Step 1).
 const MODELS = {
     groqWhisperLive: ['whisper-large-v3-turbo', 'whisper-large-v3'], // separate quotas → automatic fallback
+    groqWhisperClean: ['whisper-large-v3', 'whisper-large-v3-turbo'], // clean pass: accuracy first
     groqChat: [
         { id: 'openai/gpt-oss-120b', extra: { reasoning_effort: 'low' } },
         { id: 'qwen/qwen3.8-27b',   extra: {} },

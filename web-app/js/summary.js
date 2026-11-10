@@ -1,13 +1,20 @@
 // ==================== PROCESSING ====================
+let _summaryInFlight = false;
 async function processRecording() {
     if (!meetingData.transcript.length) {
         // Audio that was all queued for retry must not be stranded: save an empty pending meeting.
+        const emptyId = currentMeetingId;   // captured before any await
         let queued = 0;
-        try { queued = currentMeetingId ? (await getQueuedChunks(currentMeetingId)).length : 0; } catch (e) { /* treat as none */ }
-        if (queued) {
+        try { queued = emptyId ? (await getQueuedChunks(emptyId)).length : 0; } catch (e) { /* treat as none */ }
+        let kept = 0;
+        try { kept = emptyId ? (await getAudioSummary(emptyId)).seconds : 0; } catch (e) { /* treat as none */ }
+        if (queued || kept >= 1) {
             meetingData.summaryStatus = 'pending';
             meetingData.summaryError = null;
-            if (await saveCurrentMeeting({ silent: true, allowEmpty: true })) clearDraft();
+            if (await saveCurrentMeeting({ silent: true, allowEmpty: true })) {
+                clearDraft();
+                cleanPassAfterSave(emptyId || currentMeetingId);
+            }
             showProcessingOverlay(false);
             displayResults();
             return;
@@ -22,92 +29,100 @@ async function processRecording() {
     meetingData.summaryStatus = 'pending';
     meetingData.summaryError = null;
     showProcessingOverlay(true, 'Saving transcript…');
-    if (await saveCurrentMeeting({ silent: true })) clearDraft(); // keep the draft if the save failed
+    const processedId = currentMeetingId;   // captured before any await
+    if (await saveCurrentMeeting({ silent: true })) {   // keep the draft if the save failed
+        clearDraft();
+        cleanPassAfterSave(processedId || currentMeetingId);   // background; does not delay the summary
+    }
     await runSummary();
 }
 
 async function runSummary() {
-    const llmProvider = appStorage.getItem('llm_provider') || 'groq';
-    if (llmProvider === 'none') {
-        Object.assign(meetingData, { summary: 'AI summary disabled.', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [], summaryStatus: 'skipped' });
-        await saveCurrentMeeting({ silent: true });
-        showProcessingOverlay(false);
-        displayResults();
-        return;
-    }
-    showProcessingOverlay(true, 'Building transcript…');
-    let saved = false;
+    _summaryInFlight = true;
     try {
-        // Include speaker labels when available so AI can attribute action items correctly
-        const transcriptText = meetingData.transcript.map(s => {
-            const txt = s.corrected || s.original;
-            return s.speaker ? `[${s.speaker}]: ${txt}` : txt;
-        }).join('\n');
-        let analysis;
-        if (llmProvider === 'groq') {
-            showProcessingOverlay(true, 'Analyzing with Groq AI…');
-            analysis = await analyzeWithGroq(transcriptText);
-        } else if (llmProvider === 'openai') {
-            showProcessingOverlay(true, 'Analyzing with OpenAI…');
-            analysis = await analyzeWithOpenAI(transcriptText);
-        } else if (llmProvider === 'anthropic') {
-            showProcessingOverlay(true, 'Analyzing with Claude…');
-            analysis = await analyzeWithAnthropic(transcriptText);
-        } else if (llmProvider === 'gemini') {
-            showProcessingOverlay(true, 'Analyzing with Gemini…');
-            analysis = await analyzeWithGemini(transcriptText);
-        } else if (llmProvider === 'ollama') {
-            showProcessingOverlay(true, 'Analyzing with Ollama…');
-            if (!ollamaConnected) await checkOllamaConnection();
-            if (!ollamaConnected) throw new Error('Ollama not connected. Start Ollama or switch to Groq in Settings.');
-            analysis = await analyzeWithOllama(transcriptText);
-        } else {
-            analysis = { summary: 'AI summary disabled.', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [] };
-        }
-        // Normalize all array items to strings — LLMs sometimes return objects
-        const toStr = item => {
-            if (typeof item === 'string') return item;
-            if (item && typeof item === 'object') {
-                const parts = [];
-                if (item.task || item.Task) parts.push('Task: ' + (item.task || item.Task));
-                if (item.owner || item.Owner) parts.push('Owner: ' + (item.owner || item.Owner));
-                if (item.deadline || item.Deadline) parts.push('Deadline: ' + (item.deadline || item.Deadline));
-                if (item.context || item.Context) parts.push('Context: ' + (item.context || item.Context));
-                if (item.notes || item.Notes) parts.push('Notes: ' + (item.notes || item.Notes));
-                if (parts.length) return parts.join(' — ');
-                return Object.entries(item).map(([k, v]) => `${k}: ${v}`).join(' — ');
-            }
-            return String(item);
-        };
-        if (analysis.cleaned_transcript) meetingData.fullTranscript = analysis.cleaned_transcript;
-        meetingData.summary = typeof analysis.summary === 'string' ? analysis.summary : (analysis.summary ? String(analysis.summary) : 'No summary generated.');
-        meetingData.keyPoints = (analysis.keyPoints || []).map(toStr);
-        meetingData.keyDecisions = (analysis.keyDecisions || []).map(toStr);
-        meetingData.actionItems = (analysis.actionItems || []).map(toStr);
-        meetingData.nextSteps = (analysis.nextSteps || []).map(toStr);
-        meetingData.summaryStatus = 'done';
-        meetingData.summaryError = null;
-        try { buildCitations(); } catch (e) { console.warn('[runSummary] buildCitations failed:', e); }
-        showProcessingOverlay(true, 'Saving meeting…');
-        await saveCurrentMeeting({ silent: true });
-        saved = true;
-    } catch (e) {
-        showProcessingOverlay(false);
-        Object.assign(meetingData, { summary: '', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [],
-            summaryStatus: 'failed', summaryError: e.message });
-        await saveCurrentMeeting({ silent: true });
-        displayResults();
-        showToast(t('summaryFailedSaved') + ' ' + e.message, 'error');
-    }
-    if (saved) {
-        // Post-save UI work: a throw here must never overwrite a good summary as 'failed'.
-        try {
+        const llmProvider = appStorage.getItem('llm_provider') || 'groq';
+        if (llmProvider === 'none') {
+            Object.assign(meetingData, { summary: 'AI summary disabled.', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [], summaryStatus: 'skipped' });
+            await saveCurrentMeeting({ silent: true });
+            showProcessingOverlay(false);
             displayResults();
-            showToast('Meeting processed!', 'success');
-            pushWebhook().catch(() => {});
-        } catch (e) { console.warn('[runSummary] post-save UI failed:', e); }
-        showProcessingOverlay(false);
-    }
+            return;
+        }
+        showProcessingOverlay(true, 'Building transcript…');
+        let saved = false;
+        try {
+            // Include speaker labels when available so AI can attribute action items correctly
+            const transcriptText = meetingData.transcript.map(s => {
+                const txt = s.corrected || s.original;
+                return s.speaker ? `[${s.speaker}]: ${txt}` : txt;
+            }).join('\n');
+            let analysis;
+            if (llmProvider === 'groq') {
+                showProcessingOverlay(true, 'Analyzing with Groq AI…');
+                analysis = await analyzeWithGroq(transcriptText);
+            } else if (llmProvider === 'openai') {
+                showProcessingOverlay(true, 'Analyzing with OpenAI…');
+                analysis = await analyzeWithOpenAI(transcriptText);
+            } else if (llmProvider === 'anthropic') {
+                showProcessingOverlay(true, 'Analyzing with Claude…');
+                analysis = await analyzeWithAnthropic(transcriptText);
+            } else if (llmProvider === 'gemini') {
+                showProcessingOverlay(true, 'Analyzing with Gemini…');
+                analysis = await analyzeWithGemini(transcriptText);
+            } else if (llmProvider === 'ollama') {
+                showProcessingOverlay(true, 'Analyzing with Ollama…');
+                if (!ollamaConnected) await checkOllamaConnection();
+                if (!ollamaConnected) throw new Error('Ollama not connected. Start Ollama or switch to Groq in Settings.');
+                analysis = await analyzeWithOllama(transcriptText);
+            } else {
+                analysis = { summary: 'AI summary disabled.', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [] };
+            }
+            // Normalize all array items to strings — LLMs sometimes return objects
+            const toStr = item => {
+                if (typeof item === 'string') return item;
+                if (item && typeof item === 'object') {
+                    const parts = [];
+                    if (item.task || item.Task) parts.push('Task: ' + (item.task || item.Task));
+                    if (item.owner || item.Owner) parts.push('Owner: ' + (item.owner || item.Owner));
+                    if (item.deadline || item.Deadline) parts.push('Deadline: ' + (item.deadline || item.Deadline));
+                    if (item.context || item.Context) parts.push('Context: ' + (item.context || item.Context));
+                    if (item.notes || item.Notes) parts.push('Notes: ' + (item.notes || item.Notes));
+                    if (parts.length) return parts.join(' — ');
+                    return Object.entries(item).map(([k, v]) => `${k}: ${v}`).join(' — ');
+                }
+                return String(item);
+            };
+            if (analysis.cleaned_transcript) meetingData.fullTranscript = analysis.cleaned_transcript;
+            meetingData.summary = typeof analysis.summary === 'string' ? analysis.summary : (analysis.summary ? String(analysis.summary) : 'No summary generated.');
+            meetingData.keyPoints = (analysis.keyPoints || []).map(toStr);
+            meetingData.keyDecisions = (analysis.keyDecisions || []).map(toStr);
+            meetingData.actionItems = (analysis.actionItems || []).map(toStr);
+            meetingData.nextSteps = (analysis.nextSteps || []).map(toStr);
+            meetingData.summaryStatus = 'done';
+            meetingData.summaryError = null;
+            meetingData.summarySource = meetingData.transcriptView || 'live';
+            try { buildCitations(); } catch (e) { console.warn('[runSummary] buildCitations failed:', e); }
+            showProcessingOverlay(true, 'Saving meeting…');
+            await saveCurrentMeeting({ silent: true });
+            saved = true;
+        } catch (e) {
+            showProcessingOverlay(false);
+            Object.assign(meetingData, { summary: '', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [],
+                summaryStatus: 'failed', summaryError: e.message });
+            await saveCurrentMeeting({ silent: true });
+            displayResults();
+            showToast(t('summaryFailedSaved') + ' ' + e.message, 'error');
+        }
+        if (saved) {
+            // Post-save UI work: a throw here must never overwrite a good summary as 'failed'.
+            try {
+                displayResults();
+                showToast('Meeting processed!', 'success');
+                pushWebhook().catch(() => {});
+            } catch (e) { console.warn('[runSummary] post-save UI failed:', e); }
+            showProcessingOverlay(false);
+        }
+    } finally { _summaryInFlight = false; }
 }
 
 async function retrySummary() {

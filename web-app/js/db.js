@@ -110,6 +110,26 @@ async function deleteMeeting(id) {
     });
 }
 
+// Read-modify-write in ONE transaction, so background writers (clean pass) never clobber each other.
+async function patchMeeting(id, fn) {
+    if (!db) await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction([STORE_NAME], 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        let found = false;
+        const req = store.get(id);
+        req.onsuccess = () => {
+            if (!req.result) return;
+            found = true;
+            fn(req.result);
+            store.put(req.result);
+        };
+        tx.oncomplete = () => resolve(found);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('Meeting update aborted'));
+    });
+}
+
 function _meetingMatchesQuery(m, q) {
     if (m.title?.toLowerCase().includes(q)) return true;
     if (m.summary?.toLowerCase().includes(q)) return true;

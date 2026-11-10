@@ -94,7 +94,7 @@ async function checkGroqModels({ force = false } = {}) {
         if (!ids.length) return;
         _groqAvailableIds = ids;
         appStorage.setItem(MODEL_CACHE_KEY, JSON.stringify({ at: Date.now(), ids, keyTag: _groqKeyTag() }));
-        const missing = [...MODELS.groqWhisperLive, ...MODELS.groqChat.map(m => m.id)].filter(id => !ids.includes(id));
+        const missing = [...new Set([...MODELS.groqWhisperLive, ...MODELS.groqWhisperClean, ...MODELS.groqChat.map(m => m.id)])].filter(id => !ids.includes(id));
         if (missing.length) console.warn('[Groq] configured models not offered by this key, skipping:', missing);
     } catch (e) { /* offline or blocked: keep the configured chain */ }
 }

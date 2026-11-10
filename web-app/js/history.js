@@ -85,7 +85,12 @@ async function loadMeetingFromHistory(id) {
             nextSteps: meeting.nextSteps || [],
             summaryStatus: meeting.summaryStatus || 'done',
             summaryError: meeting.summaryError || null,
-            citations: null
+            citations: null,
+            cleanPass: meeting.cleanPass || null,
+            cleanTranscript: meeting.cleanTranscript || null,
+            liveTranscript: meeting.transcript || [],
+            transcriptView: 'live',   // Task 4 applies meeting.transcriptView
+            summarySource: meeting.summarySource || null
         };
         displayResults();
         closeHistorySidebar();
@@ -110,23 +115,28 @@ async function saveCurrentMeeting({ silent = false, allowEmpty = false } = {}) {
 
     let savedTimestamp = Date.now();
     let titleEdited = false;
+    let existing = null;
     if (snapMeetingId) {
         try {
-            const existing = await getMeeting(id);
+            existing = (await getMeeting(id)) || null;
             if (existing?.timestamp) savedTimestamp = existing.timestamp;
             if (existing?.titleEdited && existing.title) { title = existing.title; titleEdited = true; }   // a rename sticks
         } catch (e) { /* ignore */ }
     }
 
-    const meeting = { id, title, titleEdited, timestamp: savedTimestamp, duration,
-        transcript: snap.transcript, bookmarks: snap.bookmarks || [],
+    const meeting = { ...(existing || {}), id, title, titleEdited, timestamp: savedTimestamp, duration,
+        transcript: MTLib.liveTranscriptOf(snap), bookmarks: snap.bookmarks || [],
         fullTranscript: snap.fullTranscript,
         summary: snap.summary, keyPoints: snap.keyPoints,
         keyDecisions: snap.keyDecisions, actionItems: snap.actionItems,
         actionItemsChecked: snap.actionItemsChecked || [],
         nextSteps: snap.nextSteps,
         summaryStatus: snap.summaryStatus || 'done',
-        summaryError: snap.summaryError || null
+        summaryError: snap.summaryError || null,
+        cleanPass: snap.cleanPass || existing?.cleanPass || null,
+        cleanTranscript: snap.cleanTranscript || existing?.cleanTranscript || null,
+        transcriptView: snap.transcriptView || 'live',
+        summarySource: snap.summarySource || existing?.summarySource || null
     };
     try {
         await saveMeeting(meeting);

@@ -80,7 +80,7 @@ async function recoverDraft({ quiet = false } = {}) {
     if (d.title && document.getElementById('meetingTitle')) document.getElementById('meetingTitle').value = d.title;
     document.getElementById('recoveryBanner').style.display = 'none';
     const saved = await saveCurrentMeeting({ silent: true });
-    if (saved) clearDraft();
+    if (saved) { clearDraft(); cleanPassAfterSave(currentMeetingId); }
     updateSpeakersList();
     displayResults();
     setAppState('done');

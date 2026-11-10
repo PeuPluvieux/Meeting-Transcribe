@@ -508,11 +508,11 @@ function buildWhisperForm(blob, model, sourceLang) {
 
 // Tries each model in the Whisper chain. The quota tracker skips a model that is resting (429
 // cooldown, request or audio-seconds budget), so a long Groq cooldown switches to the backup model
-// without another 429. Returns transcript text ('' for silence); throws only when every option is
+// without another 429. Returns transcript text ('' for silence), or [{start,end,text}] with segments:true; throws only when every option is
 // exhausted (GroqLimitError when every model is resting longer than maxWaitMs).
-async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AUDIO_CHUNK_MS / 1000, maxWaitMs = 15000 } = {}) {
+async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AUDIO_CHUNK_MS / 1000, maxWaitMs = 15000, models = MODELS.groqWhisperLive, timeoutMs = 30000, segments = false } = {}) {
     let lastErr;
-    const chain = groqModelChain(MODELS.groqWhisperLive);
+    const chain = groqModelChain(models);
     for (let i = 0; i < chain.length; i++) {
         const model = chain[i];
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -530,7 +530,7 @@ async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AU
                     method: 'POST',
                     headers: { 'Authorization': 'Bearer ' + groqKey },
                     body: buildWhisperForm(blob, model, sourceLang),
-                    signal: AbortSignal.timeout(30000)
+                    signal: AbortSignal.timeout(timeoutMs)
                 });
             } catch (e) { lastErr = e; await sleep(1000 * (attempt + 1)); continue; } // network/timeout
             if (resp.ok) {
@@ -538,7 +538,8 @@ async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AU
                 groqQuota.noteAudio(model, audioSeconds, GROQ_LIMITS.whisper);
                 saveQuotaState();
                 const data = await resp.json();
-                return MTAudio.filterWhisperResult(data, { onDrop: (txt, why) => console.debug('[Whisper filter] dropped (' + why + '):', txt) });
+                const onDrop = (txt, why) => console.debug('[Whisper filter] dropped (' + why + '):', txt);
+                return segments ? MTAudio.whisperSegments(data, { onDrop }) : MTAudio.filterWhisperResult(data, { onDrop });
             }
             const err = await resp.json().catch(() => ({}));
             groqQuota.noteResponse(model, resp.status, h => resp.headers.get(h),

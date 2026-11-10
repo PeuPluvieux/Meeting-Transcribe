@@ -29,6 +29,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     checkGroqModels(); // async, non-blocking; cached 24 h
     purgeOldQueuedChunks(); // async, non-blocking
     purgeOldAudio(); // async, non-blocking
+    setTimeout(resumeCleanPasses, 10000); // finish clean passes a reload interrupted
     initSpeakers();
     setAppState('idle');
     checkDraftRecovery();

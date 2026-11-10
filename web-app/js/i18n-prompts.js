@@ -64,6 +64,8 @@ const UI_STRINGS = {
         newMeetingConfirm: 'Stop the current recording? It will be saved to History first.',
         previousSaved: 'Previous meeting saved to History.',
         draftAutoSaved: 'Unfinished meeting saved to History before starting a new one.',
+        cleanNeedsKey: 'A Groq key is needed for the clean transcript (Settings).',
+        cleanReady: 'Clean transcript ready.',
     },
     'zh-TW': {
         headerTitle: 'AI 會議記錄',
@@ -129,6 +131,8 @@ const UI_STRINGS = {
         newMeetingConfirm: '要停止目前的錄音嗎？會先儲存到歷史紀錄。',
         previousSaved: '上一場會議已儲存至歷史紀錄。',
         draftAutoSaved: '已先將未完成的會議儲存至歷史紀錄，再開始新的會議。',
+        cleanNeedsKey: '精修逐字稿需要 Groq 金鑰（請至設定）。',
+        cleanReady: '精修逐字稿已完成。',
     }
 };
 

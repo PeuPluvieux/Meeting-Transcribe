@@ -175,7 +175,11 @@ async function startNewMeeting() {
         await stopAudioStore();
         stopTimer();
         meetingData.summaryStatus = 'pending';
-        if (await saveCurrentMeeting({ silent: true })) { clearDraft(); showToast(t('previousSaved'), 'success'); }
+        if (await saveCurrentMeeting({ silent: true })) {
+            const savedId = currentMeetingId;   // captured before the reset below
+            clearDraft(); showToast(t('previousSaved'), 'success');
+            cleanPassAfterSave(savedId);
+        }
         else {
             // Save failed: keep meetingData + draft so nothing is lost; show the transcript so the user can retry.
             displayResults();
