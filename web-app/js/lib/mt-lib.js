@@ -161,8 +161,22 @@
         return age > 14 * DAY_MS ? 'delete' : 'keep';
     }
 
+    // How much of the meeting the clean transcript covers, measured against the live transcript's end
+    // (last live segment start + 10 s). full: safe to show instead of Live (mic kept and >= 90 % covered).
+    function cleanCoverage({ cleanSeconds, liveEndSeconds, hasMic }) {
+        const clean = Number.isFinite(cleanSeconds) ? cleanSeconds : 0;
+        const ratio = liveEndSeconds > 0 ? Math.min(1, clean / liveEndSeconds) : 1;
+        return { ratio, full: !!hasMic && ratio >= 0.9 };
+    }
+
+    function liveEndSeconds(live) {
+        let last = -Infinity;
+        for (const s of live || []) if (s && Number.isFinite(s.startSeconds) && s.startSeconds > last) last = s.startSeconds;
+        return last === -Infinity ? 0 : last + 10;
+    }
+
     const api = { keyFingerprint, namespacedStorage, copyMainSettings, parseDurationMs, retryDelayMs, retryHintFromMessage, parseJsonLoose, groupForMerge, isRetryableGroq400, DRAFT_VERSION, buildDraft, isRecoverableDraft, insertSegmentSorted, rebuildFullTranscript,
-        liveTranscriptOf, hasUserEdits, mapSpeakersByTime, audioRetention };
+        liveTranscriptOf, hasUserEdits, mapSpeakersByTime, audioRetention, cleanCoverage, liveEndSeconds };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MTLib = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

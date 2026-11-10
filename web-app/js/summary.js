@@ -39,6 +39,11 @@ async function processRecording() {
 
 async function runSummary() {
     _summaryInFlight = true;
+    // Redoing a good summary (e.g. from the clean transcript): a failure keeps the previous one.
+    const prevSummary = meetingData.summaryStatus === 'done' ? {
+        summary: meetingData.summary, keyPoints: meetingData.keyPoints, keyDecisions: meetingData.keyDecisions,
+        actionItems: meetingData.actionItems, nextSteps: meetingData.nextSteps, actionItemsChecked: meetingData.actionItemsChecked,
+        summarySource: meetingData.summarySource, citations: meetingData.citations } : null;
     try {
         const llmProvider = appStorage.getItem('llm_provider') || 'groq';
         if (llmProvider === 'none') {
@@ -101,17 +106,25 @@ async function runSummary() {
             meetingData.summaryStatus = 'done';
             meetingData.summaryError = null;
             meetingData.summarySource = meetingData.transcriptView || 'live';
+            if (prevSummary) meetingData.actionItemsChecked = [];   // new action items: old ticks would point at the wrong ones
             try { buildCitations(); } catch (e) { console.warn('[runSummary] buildCitations failed:', e); }
             showProcessingOverlay(true, 'Saving meeting…');
             await saveCurrentMeeting({ silent: true });
             saved = true;
         } catch (e) {
             showProcessingOverlay(false);
-            Object.assign(meetingData, { summary: '', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [],
-                summaryStatus: 'failed', summaryError: e.message });
-            await saveCurrentMeeting({ silent: true });
-            displayResults();
-            showToast(t('summaryFailedSaved') + ' ' + e.message, 'error');
+            if (prevSummary) {
+                Object.assign(meetingData, prevSummary, { summaryStatus: 'done', summaryError: null });
+                await saveCurrentMeeting({ silent: true });
+                displayResults();
+                showToast(t('summaryRedoFailed') + ' ' + e.message, 'error');
+            } else {
+                Object.assign(meetingData, { summary: '', keyPoints: [], keyDecisions: [], actionItems: [], nextSteps: [],
+                    summaryStatus: 'failed', summaryError: e.message });
+                await saveCurrentMeeting({ silent: true });
+                displayResults();
+                showToast(t('summaryFailedSaved') + ' ' + e.message, 'error');
+            }
         }
         if (saved) {
             // Post-save UI work: a throw here must never overwrite a good summary as 'failed'.

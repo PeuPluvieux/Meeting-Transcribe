@@ -72,6 +72,7 @@ async function loadMeetingFromHistory(id) {
         const meeting = await getMeeting(id);
         if (!meeting) { showToast('Meeting not found', 'error'); return; }
         currentMeetingId = id;
+        editHistory = [];   // undo must not reach into the previously open meeting
         currentSegmentId = (meeting.transcript || []).reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
         meetingData = {
             transcript: meeting.transcript || [],

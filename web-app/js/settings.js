@@ -191,6 +191,7 @@ async function startNewMeeting() {
     meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null,
         cleanPass: null, cleanTranscript: null, liveTranscript: null, transcriptView: 'live', summarySource: null };
     currentSegmentId = 0;
+    editHistory = [];   // undo must not reach into the previous meeting
     interimElement = null;
     _lastAddedText = '';
     _lastAddedAt = 0;

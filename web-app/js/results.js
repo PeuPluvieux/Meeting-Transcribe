@@ -191,6 +191,7 @@ function setTranscriptView(view) {
     md.fullTranscript = MTLib.rebuildFullTranscript(md.transcript);
     currentSegmentId = md.transcript.reduce((m, s) => Math.max(m, Number(s.id) || 0), -1) + 1;
     if (typeof cancelEditing === 'function') cancelEditing();
+    editHistory = [];   // undo entries point at the other view's segments
     md.citations = null;
     if (md.keyPoints?.length || md.actionItems?.length) { try { buildCitations(); } catch (e) { /* ignore */ } }
     displayResults();
@@ -200,13 +201,15 @@ function setTranscriptView(view) {
 // Clean pass finished for the meeting on screen.
 function onCleanTranscriptReady() {
     const live = MTLib.liveTranscriptOf(meetingData);
-    if (!MTLib.hasUserEdits(live)) {
+    const edited = MTLib.hasUserEdits(live);
+    // Only a full clean transcript replaces Live on its own (older passes have no coverage: treated as full).
+    if (!edited && meetingData.cleanPass?.coverage?.full !== false) {
         setTranscriptView('clean');
         showToast(t('cleanReady'), 'success');
         // Nothing was summarised yet (the live transcript was empty): summarise the clean one.
         if (!live.length && meetingData.summaryStatus === 'pending' && !_summaryInFlight) retrySummary();
     } else {
-        showToast(t('cleanReadyEdited'), 'info');
+        showToast(t(edited ? 'cleanReadyEdited' : 'cleanReadyPartial'), 'info');
         refreshCleanPassUI();
     }
 }
@@ -240,9 +243,13 @@ async function refreshCleanPassUI() {
     cleanBtn.classList.toggle('active', md.transcriptView === 'clean');
     const running = isCleanPassRunning(id);
     let text = '', runLabel = '';
-    if (cp?.status === 'done') text = md.transcriptView === 'clean' ? t('cleanShowing') : t('cleanAvailableSwitch');
+    if (cp?.status === 'done' && cp.coverage?.full === false) {
+        text = t('cleanPartial').replace('{pct}', Math.round((cp.coverage.ratio || 0) * 100));
+        if (!cp.coverage.hasMic) text += ' ' + t('cleanNoMic');
+    }
+    else if (cp?.status === 'done') text = md.transcriptView === 'clean' ? t('cleanShowing') : t('cleanAvailableSwitch');
     else if (running || cp?.status === 'running') text = t('cleanRunning').replace('{done}', _fmtMin(cp?.doneSeconds || 0)).replace('{total}', _fmtMin(cp?.totalSeconds || seconds));
-    else if (cp?.status === 'pending') text = t('cleanQueued');
+    else if (cp?.status === 'pending') { text = t('cleanQueued'); runLabel = t('cleanRun'); }   // only reached when nothing runs here
     else if (cp?.status === 'waiting') { text = t('cleanWaiting') + ' ' + (cp.error || ''); runLabel = t('cleanRetry'); }
     else if (cp?.status === 'failed') { text = t('cleanFailed') + ' ' + (cp.error || ''); runLabel = t('cleanRetry'); }
     else if (seconds >= 1) { text = t('cleanOffer'); runLabel = t('cleanRun'); }

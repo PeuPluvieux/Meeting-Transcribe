@@ -5,6 +5,7 @@
 const AUDIO_DB_NAME = IS_BETA ? 'MeetingNotesAI-beta-audio' : 'MeetingNotesAI-audio';
 const AUDIO_RECORD_SAMPLES = 30 * 16000;
 const AUDIO_MIN_FREE_BYTES = 300 * 1024 * 1024;
+const AUDIO_STOP_FREE_BYTES = 500 * 1024 * 1024;   // re-checked every 10th record while recording
 let _audioDbPromise = null;
 let _store = null;               // the running store, see startAudioStore
 let _storeMeetingStream = null;  // meeting-audio stream to mix in (may arrive before the store is ready)
@@ -81,7 +82,7 @@ async function startAudioStore(meetingId) {
         }
         if ((appState !== 'recording' && appState !== 'paused') || currentMeetingId !== meetingId) throw new Error('aborted');
         const s = { meetingId, ctx, node, mute, micStream, micSrc, meetSrc: null, frames: [], samples: 0, seq: 0,
-            startSeconds: null, writes: Promise.resolve(), failed: false,
+            startSeconds: null, writes: Promise.resolve(), failed: false, hasMic: !!micSrc,
             sourceLang: appStorage.getItem('source_lang') || 'en-US' };
         node.port.onmessage = e => {
             if (_store !== s || appState !== 'recording' || s.failed || currentMeetingId !== s.meetingId) return;
@@ -111,7 +112,7 @@ function _writeRecord(s, { continuous = false } = {}) {
     let o = 0;
     for (const f of s.frames) { pcm.set(f, o); o += f.length; }
     const rec = { meetingId: s.meetingId, seq: s.seq++, startSeconds: Math.round(s.startSeconds * 100) / 100,
-        samples: pcm.length, createdAt: Date.now(), sourceLang: s.sourceLang };
+        samples: pcm.length, createdAt: Date.now(), sourceLang: s.sourceLang, hasMic: s.hasMic };
     s.frames = [];
     s.samples = 0;
     s.startSeconds = continuous ? s.startSeconds + pcm.length / MTAudio.SAMPLE_RATE : null;
@@ -120,6 +121,7 @@ function _writeRecord(s, { continuous = false } = {}) {
             tx.objectStore('chunks').put({ meetingId: rec.meetingId, seq: rec.seq, pcm: pcm.buffer });
             tx.objectStore('index').put(rec);
         }))
+        .then(() => (rec.seq % 10 === 9 ? _checkStoreHeadroom(s) : undefined))
         .catch(e => {
             if (s.failed) return;
             s.failed = true;   // stop keeping audio for this meeting; the live transcript is unaffected
@@ -127,6 +129,19 @@ function _writeRecord(s, { continuous = false } = {}) {
             showToast(t(e && e.name === 'QuotaExceededError' ? 'audioStoreFull' : 'audioStoreFailed'), 'warning');
         });
     return s.writes;
+}
+
+// Every 10th record: stop keeping audio for this meeting before the browser's storage fills up.
+async function _checkStoreHeadroom(s) {
+    if (s.failed || !navigator.storage?.estimate) return;
+    let e;
+    try { e = await navigator.storage.estimate(); } catch (err) { return; }
+    if (s.failed || !e || !e.quota) return;
+    if (e.quota - (e.usage || 0) < AUDIO_STOP_FREE_BYTES) {
+        s.failed = true;   // frames are no longer kept; the live transcript is unaffected
+        console.warn('[Audio store] storage almost full, no longer keeping audio for this meeting');
+        showToast(t('audioStoreFull'), 'warning');
+    }
 }
 
 function attachMeetingStreamToStore(stream) {
@@ -207,11 +222,15 @@ async function purgeOldAudio() {
         const newest = new Map();
         for (const r of all) newest.set(r.meetingId, Math.max(newest.get(r.meetingId) || 0, r.createdAt || 0));
         const now = Date.now();
+        let draftId = null;
+        try { draftId = (typeof _readDraft === 'function' ? _readDraft() : null)?.id || null; } catch (e) { /* no draft */ }
         for (const [id, newestAt] of newest) {
             let meeting = null;
             try { meeting = await getMeeting(id); } catch (e) { continue; }   // DB unreadable: keep
             const isRecording = id === currentMeetingId && ['recording', 'paused', 'stopping', 'processing'].includes(appState);
-            const verdict = MTLib.audioRetention({ meetingExists: !!meeting, cleanDoneAt: meeting?.cleanPass?.doneAt || null, newestAt, now, isRecording });
+            // An unrecovered crash draft is a meeting too: its audio must survive until it is recovered.
+            const isDraft = id === draftId;
+            const verdict = MTLib.audioRetention({ meetingExists: !!meeting || isDraft, cleanDoneAt: meeting?.cleanPass?.doneAt || null, newestAt, now, isRecording });
             if (verdict === 'delete') await deleteMeetingAudio(id);
         }
     } catch (e) { console.warn('[Audio store] purge failed:', e); }

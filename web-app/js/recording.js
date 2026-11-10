@@ -74,6 +74,7 @@ async function recoverDraft({ quiet = false } = {}) {
         cleanPass: null, cleanTranscript: null, liveTranscript: null, transcriptView: 'live', summarySource: null };
     currentSegmentId = d.currentSegmentId || meetingData.transcript.length;
     currentMeetingId = d.id;
+    editHistory = [];   // undo must not reach into another meeting
     speakers = d.speakers || {};
     nextSpeakerNum = d.nextSpeakerNum || 1;
     const timerEl = document.getElementById('timer');
@@ -468,6 +469,7 @@ async function _startRecordingImpl() {
             cleanPass: null, cleanTranscript: null, liveTranscript: null, transcriptView: 'live', summarySource: null };
         currentSegmentId = 0; currentMeetingId = null;
         _lastAddedText = ''; _lastAddedAt = 0;
+        editHistory = [];   // undo must not reach into the previous meeting
     }
     // Reset display mode to both so translation is always visible when recording starts
     setTranscriptDisplayMode('both');
@@ -605,6 +607,7 @@ async function stopRecording() {
             showProcessingOverlay(false);
             setAppState('done');
         }
+        purgeOldAudio();   // not awaited: frees audio past its retention now that the recording is over
     }
 }
 

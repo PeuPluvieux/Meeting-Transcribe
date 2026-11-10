@@ -120,6 +120,8 @@ function setAppState(newState) {
     // The banner drawn during processing has its buttons disabled; redraw once the app is idle again.
     if ((newState === 'idle' || newState === 'done') && typeof refreshMissingAudioBanner === 'function') refreshMissingAudioBanner();
     if ((newState === 'idle' || newState === 'done') && typeof refreshCleanPassUI === 'function') refreshCleanPassUI();
+    // A clean pass that finished while this tab was processing is announced now.
+    if ((newState === 'idle' || newState === 'done') && typeof announcePendingCleanReady === 'function') announcePendingCleanReady();
 }
 
 // ==================== RECORDING VARS ====================

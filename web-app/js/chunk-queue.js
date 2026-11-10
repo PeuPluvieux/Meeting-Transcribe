@@ -130,7 +130,7 @@ async function refreshMissingAudioBanner() {
 }
 
 // One retry at a time across all tabs: two tabs retrying the same queue would each add the recovered text.
-const QUEUE_RETRY_LOCK = 'meeting-transcribe-queue-retry';
+const QUEUE_RETRY_LOCK = 'meeting-transcribe-queue-retry' + (IS_BETA ? '-beta' : '');
 
 async function retryQueuedChunksForCurrent() {
     const meetingId = currentMeetingId;

@@ -102,7 +102,7 @@ async function checkGroqModels({ force = false } = {}) {
 // ==================== SINGLE RECORDER PER BROWSER ====================
 // Two tabs recording at once would double-spend one Groq key. Held from Start until idle/done;
 // the browser frees it automatically if the tab closes or crashes.
-const RECORDER_LOCK = 'meeting-transcribe-recorder';
+const RECORDER_LOCK = 'meeting-transcribe-recorder' + (IS_BETA ? '-beta' : '');
 let _recorderLockRelease = null;
 
 function acquireRecorderLock() {

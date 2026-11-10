@@ -510,7 +510,7 @@ function buildWhisperForm(blob, model, sourceLang) {
 // cooldown, request or audio-seconds budget), so a long Groq cooldown switches to the backup model
 // without another 429. Returns transcript text ('' for silence), or [{start,end,text}] with segments:true; throws only when every option is
 // exhausted (GroqLimitError when every model is resting longer than maxWaitMs).
-async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AUDIO_CHUNK_MS / 1000, maxWaitMs = 15000, models = MODELS.groqWhisperLive, timeoutMs = 30000, segments = false } = {}) {
+async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AUDIO_CHUNK_MS / 1000, maxWaitMs = 15000, models = MODELS.groqWhisperLive, timeoutMs = 30000, segments = false, shouldStop = null } = {}) {
     let lastErr;
     const chain = groqModelChain(models);
     for (let i = 0; i < chain.length; i++) {
@@ -523,6 +523,8 @@ async function groqWhisper(blob, groqKey, sourceLang, { audioSeconds = SYSTEM_AU
                 break;
             }
             if (wait > 0) await sleep(wait);
+            // The clean pass yields to a recording: stop before spending quota, the caller retries later.
+            if (shouldStop && shouldStop()) throw Object.assign(new Error('paused'), { name: 'CleanPassPaused' });
             groqQuota.noteSend(model);
             let resp;
             try {

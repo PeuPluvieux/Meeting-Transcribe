@@ -201,3 +201,19 @@ test('audioRetention rules', () => {
     assert.equal(R({ newestAt: undefined }), 'keep');
     assert.equal(R({ meetingExists: false, newestAt: NaN }), 'keep');
 });
+
+test('cleanCoverage: full, no mic, short coverage, empty live', () => {
+    assert.deepEqual(MTLib.cleanCoverage({ cleanSeconds: 3600, liveEndSeconds: 3610, hasMic: true }), { ratio: 3600 / 3610, full: true });
+    assert.deepEqual(MTLib.cleanCoverage({ cleanSeconds: 4000, liveEndSeconds: 3610, hasMic: true }), { ratio: 1, full: true });
+    assert.equal(MTLib.cleanCoverage({ cleanSeconds: 3600, liveEndSeconds: 3610, hasMic: false }).full, false);
+    const short = MTLib.cleanCoverage({ cleanSeconds: 1200, liveEndSeconds: 3610, hasMic: true });
+    assert.equal(short.full, false);
+    assert.equal(Math.round(short.ratio * 100), 33);
+    assert.deepEqual(MTLib.cleanCoverage({ cleanSeconds: 600, liveEndSeconds: 0, hasMic: true }), { ratio: 1, full: true });
+});
+
+test('liveEndSeconds is the last live start + 10 s, or 0', () => {
+    assert.equal(MTLib.liveEndSeconds([{ startSeconds: 5 }, { startSeconds: 120 }, { startSeconds: 60 }]), 130);
+    assert.equal(MTLib.liveEndSeconds([]), 0);
+    assert.equal(MTLib.liveEndSeconds(null), 0);
+});
