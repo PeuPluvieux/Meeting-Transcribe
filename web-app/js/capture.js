@@ -33,11 +33,6 @@ let failedMeetingChunks = [];                  // chunks that exhausted every re
 let _groqKeyErrorShown = false;
 const SYSTEM_AUDIO_CHUNK_MS = 12000; // 12s chunks
 
-// ==================== LOCAL WHISPER (Transformers.js) ====================
-const LOCAL_WHISPER_MODEL = 'Xenova/whisper-small';
-let localWhisperPipeline = null;
-let localWhisperLoading = false;
-
 // ==================== GLADIA MIC STATE ====================
 let gladiaWs = null;
 let gladiaMicStream = null;
@@ -460,35 +455,18 @@ function updateSystemAudioStatus(active) {
     if (badge) badge.style.display = active ? 'inline-flex' : 'none';
 }
 
+// "Local Whisper" engine choice: every chunk goes to the worker (js/local-whisper.js).
+let _lwNeedsPcmShown = false;
 async function transcribeLocalWhisper(blob, startSeconds, gen = _recordingGen, pcm = null) {
-    if (!pcm && blob.size < 8000) return;
-    showToast('Transcribing with local Whisper…', 'info');
+    if (!pcm) {   // legacy MediaRecorder webm path (no AudioWorklet): nothing to decode it with
+        if (!_lwNeedsPcmShown) { _lwNeedsPcmShown = true; showToast(t('localWhisperNeedsPcm'), 'warning'); }
+        return;
+    }
     try {
-        if (!localWhisperPipeline) {
-            if (localWhisperLoading) {
-                while (localWhisperLoading) await new Promise(r => setTimeout(r, 300));
-            } else {
-                localWhisperLoading = true;
-                showToast('Loading local Whisper model — first run downloads ~244 MB, then it\'s cached.', 'info');
-                try {
-                    const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2/dist/transformers.min.js');
-                    env.allowRemoteModels = true;
-                    localWhisperPipeline = await pipeline('automatic-speech-recognition', LOCAL_WHISPER_MODEL);
-                    showToast('Local Whisper model ready!', 'success');
-                } finally {
-                    localWhisperLoading = false;
-                }
-            }
-        }
-        const sourceLang = appStorage.getItem('source_lang') || 'en-US';
-        const opts = { return_timestamps: false };
-        if (!sourceLang.includes('+')) opts.language = sourceLang.split('-')[0];
-        // Transformers.js wants decoded 16 kHz Float32; WAV chunks carry their PCM (fixes P5 for this path).
-        const audio = pcm ? MTAudio.int16ToFloat32(pcm) : await blob.arrayBuffer();
-        const result = await localWhisperPipeline(audio, opts);
-        if (result.text?.trim() && gen === _recordingGen) addTranscriptSegment(result.text.trim(), 'meeting', { startSeconds });
+        const text = await transcribeLocalPcm(pcm, appStorage.getItem('source_lang') || 'en-US');
+        if (text && gen === _recordingGen) addTranscriptSegment(text, 'meeting', { startSeconds });
     } catch (e) {
-        showToast('Local Whisper failed: ' + e.message, 'error');
+        showToast(t('localWhisperFailed').replace('{msg}', e.message), 'error');
         console.error('[Local Whisper]', e);
     }
 }
