@@ -193,17 +193,26 @@
         return out;
     }
 
-    // Share of the mic tokens that appear, in order, in the meeting text (LCS / mic length).
+    // Share of the mic tokens that appear, in order, inside one compact stretch of the meeting text
+    // (at most 1.5× the mic length + 2 tokens). A compact window stops short replies made of
+    // common words ("yes I think so") from matching words scattered across 25 s of meeting text.
+    function _lcs(a, b, from, to) {
+        let prev = new Array(to - from + 1).fill(0);
+        for (let i = 1; i <= a.length; i++) {
+            const cur = new Array(to - from + 1).fill(0);
+            for (let j = 1; j <= to - from; j++) cur[j] = a[i - 1] === b[from + j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+            prev = cur;
+        }
+        return prev[to - from];
+    }
     function echoCoverage(micText, meetingText) {
         const a = echoTokens(micText), b = echoTokens(meetingText);
         if (!a.length || !b.length) return 0;
-        let prev = new Array(b.length + 1).fill(0);
-        for (let i = 1; i <= a.length; i++) {
-            const cur = new Array(b.length + 1).fill(0);
-            for (let j = 1; j <= b.length; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
-            prev = cur;
-        }
-        return prev[b.length] / a.length;
+        const span = Math.ceil(a.length * 1.5) + 2;
+        if (b.length <= span) return _lcs(a, b, 0, b.length) / a.length;
+        let best = 0;
+        for (let from = 0; from + span <= b.length && best < a.length; from++) best = Math.max(best, _lcs(a, b, from, from + span));
+        return best / a.length;
     }
 
     // back/ahead: meeting lines starting up to `back` s before or `ahead` s after the mic line.

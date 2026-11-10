@@ -259,7 +259,7 @@ test('isEcho: never for short, labelled, edited or non-mic lines', () => {
     assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 105, 'the OQC team found', { speaker: 'spk1' }), tr), false);
     assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 105, 'the OQC team found', { editedAt: 1 }), tr), false);
     assert.strictEqual(MTLib.isEcho(seg(2, 'meeting', 105, 'the OQC team found'), tr), false);
-    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 105, 'the OQC team found'), tr.concat([])), true);                      // control
+    assert.strictEqual(MTLib.isEcho(seg(2, 'mic', 105, 'the OQC team found'), tr), true);                      // control
 });
 
 test('isEcho: uses corrected text when present', () => {
@@ -277,4 +277,12 @@ test('findEchoes: returns ids of mic lines the new meeting line repeats, ignores
     ];
     assert.deepStrictEqual(MTLib.findEchoes(tr, m), [4]);
     assert.deepStrictEqual(MTLib.findEchoes([], m), []);
+});
+
+test('echoCoverage: words scattered across a long meeting line do not count (compact window)', () => {
+    const meeting = 'yes we did the test and I would think the result is fine so we can ship';
+    assert.ok(MTLib.echoCoverage('yes I think so', meeting) < 0.8);
+    assert.strictEqual(MTLib.echoCoverage('I would think the result is fine', meeting), 1);
+    const tr = [{ id: 1, source: 'meeting', startSeconds: 100, original: meeting, corrected: null, speaker: null }];
+    assert.strictEqual(MTLib.isEcho({ id: 2, source: 'mic', startSeconds: 104, original: 'yes I think so', corrected: null, speaker: null }, tr), false);
 });
