@@ -5,6 +5,11 @@
 (function (root) {
     'use strict';
 
+    // Traditional -> Simplified fold, for echo matching only (never displayed text).
+    const _foldZh = (typeof module !== 'undefined' && module.exports)
+        ? require('./zh-fold.js').foldToSimplified
+        : ((root.MTZhFold && root.MTZhFold.foldToSimplified) || (s => s));
+
     // ==================== STORAGE NAMESPACING ====================
     function namespacedStorage(storage, prefix) {
         const k = key => prefix + key;
@@ -180,7 +185,7 @@
     // twice: from Web Speech (mic) and from Whisper (meeting audio). Tokens: each CJK character
     // is one token, Latin words are lowercased tokens, punctuation and symbols are dropped.
     function echoTokens(text) {
-        const s = String(text ?? '').normalize('NFKC').toLowerCase().replace(/[\p{P}\p{S}]+/gu, ' ');
+        const s = _foldZh(String(text ?? '').normalize('NFKC')).toLowerCase().replace(/[\p{P}\p{S}]+/gu, ' ');
         const out = [];
         for (const run of s.split(/\s+/)) {
             let word = '';

@@ -3,12 +3,32 @@
 // unavailable, as the last live fallback for meeting-audio chunks (B4c).
 const LOCAL_WHISPER_DEFAULT_MODEL = 'onnx-community/whisper-base';
 const LOCAL_WHISPER_MAX_BACKLOG = 3;
+const LOCAL_WHISPER_IDLE_MS = 180000;   // release the worker (and its WASM heap) after 3 min idle
+let _lwIdleTimer = null;
+let _lwShownLoadToasts = false;         // never reset: a reload after release (served from cache) stays silent
 let _lwOutstanding = 0;   // posted to the worker, reply not yet received (includes timed-out requests)
 let _lwWorker = null, _lwSeq = 0, _lwReady = false, _lwLoadingToast = false;
 const _lwPending = new Map();   // id → { resolve, reject, timer }
 
 function localWhisperFallbackEnabled() { return appStorage.getItem('local_whisper_fallback') !== 'false'; }
 function localWhisperBacklog() { return _lwOutstanding; }
+function localWhisperReady() { return _lwReady; }
+
+function releaseLocalWhisper() {
+    clearTimeout(_lwIdleTimer); _lwIdleTimer = null;
+    if (!_lwWorker) return;
+    _lwFailAll('Local Whisper released');
+    try { _lwWorker.terminate(); } catch (_) {}
+    _lwWorker = null; _lwReady = false;
+}
+
+function _lwScheduleIdle() {
+    clearTimeout(_lwIdleTimer);
+    _lwIdleTimer = setTimeout(() => {
+        if (_lwOutstanding > 0 || ['recording', 'paused', 'stopping'].includes(appState)) _lwScheduleIdle();
+        else releaseLocalWhisper();
+    }, LOCAL_WHISPER_IDLE_MS);
+}
 
 function localWhisperModel() {
     const m = appStorage.getItem('local_whisper_model');   // hidden test override (e.g. whisper-tiny)
@@ -26,17 +46,18 @@ function _lwGetWorker() {
     _lwWorker = new Worker('js/whisper-worker.js?v=' + APP_VERSION, { type: 'module' });
     _lwWorker.onmessage = ({ data }) => {
         if (data.type === 'progress') {
-            if (!_lwReady && !_lwLoadingToast) { _lwLoadingToast = true; showToast(t('localWhisperLoading'), 'info'); }
+            if (!_lwReady && !_lwLoadingToast && !_lwShownLoadToasts) { _lwLoadingToast = true; showToast(t('localWhisperLoading'), 'info'); }
             return;
         }
         if (data.type === 'ready') {
-            if (!_lwReady && _lwLoadingToast) showToast(t('localWhisperReady'), 'success');
+            if (!_lwReady && _lwLoadingToast && !_lwShownLoadToasts) { showToast(t('localWhisperReady'), 'success'); _lwShownLoadToasts = true; }
             _lwReady = true;
             return;
         }
         if (data.id != null && (data.type === 'result' || data.type === 'error')) {
             _lwOutstanding = Math.max(0, _lwOutstanding - 1);
             if (data.type === 'error' && !_lwReady) _lwLoadingToast = false;
+            _lwScheduleIdle();
         }
         const p = _lwPending.get(data.id);
         if (!p) return;                       // timed out earlier

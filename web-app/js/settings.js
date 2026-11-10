@@ -195,8 +195,7 @@ async function startNewMeeting() {
     currentSegmentId = 0;
     editHistory = [];   // undo must not reach into the previous meeting
     interimElement = null;
-    _lastAddedText = '';
-    _lastAddedAt = 0;
+    for (const k in _lastAdded) _lastAdded[k] = { text: '', at: 0 };
     currentMeetingId = null;
     initSpeakers();
     resetTimer();

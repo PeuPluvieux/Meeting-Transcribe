@@ -3,6 +3,10 @@
 ## v9.14.0 (2026-11-10) — B4c echo dedupe + Local Whisper worker
 - **Echo (no headphones):** a mic line whose words the meeting audio already delivered (≥ 80% of its words, in order, within 20 s before / 5 s after) is dropped, or removed when the meeting line arrives later. Labelled or edited lines are never removed. One-time headphones hint.
 - **Local Whisper fallback:** when both Groq Whisper models are unavailable, live meeting-audio chunks are transcribed on the computer (Web Worker, Transformers.js 3.8.1, whisper-base q8) instead of only waiting in "Retry missing audio". At most 3 chunks wait locally; more go to the retry queue. Setting: "If Groq is unavailable, transcribe meeting audio on this computer" (default on).
+- **Echo matching folds Traditional and Simplified Chinese** (OpenCC data in js/lib/zh-fold.js); matching only, displayed text is unchanged.
+- **The 3 s exact-repeat guard is now per source** (a mic copy no longer suppresses the identical meeting copy).
+- **Local Whisper worker is released after 3 min idle** (reloads silently from cache; no model download is started during Stop).
+- **Known limits:** the "Local Whisper" engine has no backlog cap, so a very slow CPU can time out chunks (pre-existing). Transformers.js and the model are fetched from jsDelivr/Hugging Face without SRI; vendoring them under web-app/vendor/ is planned before main. Local Whisper output in Chinese may be Simplified.
 - **P5 fixed:** the "Local Whisper" engine no longer runs Transformers.js v2 on the main thread.
 
 ## v9.13.0 (2026-11-10) — B4b audio store + clean pass

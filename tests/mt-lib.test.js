@@ -219,7 +219,7 @@ test('liveEndSeconds is the last live start + 10 s, or 0', () => {
 });
 
 test('echoTokens: CJK chars are single tokens, Latin words lowercased, punctuation dropped', () => {
-    assert.deepStrictEqual(MTLib.echoTokens('OQC 這邊發現, DPPM 超標!'), ['oqc', '這', '邊', '發', '現', 'dppm', '超', '標']);
+    assert.deepStrictEqual(MTLib.echoTokens('OQC 這邊發現, DPPM 超標!'), ['oqc', '这', '边', '发', '现', 'dppm', '超', '标']);
     assert.deepStrictEqual(MTLib.echoTokens('  Hello,   World. '), ['hello', 'world']);
     assert.deepStrictEqual(MTLib.echoTokens(''), []);
     assert.deepStrictEqual(MTLib.echoTokens(null), []);
@@ -285,4 +285,16 @@ test('echoCoverage: words scattered across a long meeting line do not count (com
     assert.strictEqual(MTLib.echoCoverage('I would think the result is fine', meeting), 1);
     const tr = [{ id: 1, source: 'meeting', startSeconds: 100, original: meeting, corrected: null, speaker: null }];
     assert.strictEqual(MTLib.isEcho({ id: 2, source: 'mic', startSeconds: 104, original: 'yes I think so', corrected: null, speaker: null }, tr), false);
+});
+
+test('echo matching folds Traditional and Simplified Chinese', () => {
+    assert.deepStrictEqual(MTLib.echoTokens('這邊發現'), MTLib.echoTokens('这边发现'));
+    assert.strictEqual(MTLib.echoCoverage('我們要開 NCR', '这周 DPPM 超标，我们要开 NCR。'), 1);
+    const tr = [{ id: 1, source: 'meeting', startSeconds: 100, original: '这周的 DPPM 有点超标，我们要开 NCR。', corrected: null, speaker: null }];
+    assert.strictEqual(MTLib.isEcho({ id: 2, source: 'mic', startSeconds: 106, original: '這週的 DPPM 有點超標', corrected: null, speaker: null }, tr), true);
+});
+test('zh-fold: folds Traditional variants, leaves other text alone', () => {
+    const Z = require('../web-app/js/lib/zh-fold.js');
+    assert.strictEqual(Z.foldToSimplified('發髮 OQC abc 123'), '发发 OQC abc 123');
+    assert.ok(Z.size > 3000);
 });

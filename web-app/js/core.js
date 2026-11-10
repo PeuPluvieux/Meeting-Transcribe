@@ -1,5 +1,5 @@
 // ============================================================
-// Meeting Notes AI v9.13.0
+// Meeting Notes AI v9.14.0
 // Mic: Web Speech API OR Gladia (switchable) + System Audio via Groq Whisper
 // ============================================================
 
@@ -135,8 +135,8 @@ let currentSegmentId = 0;
 let interimElement = null;
 let interimTranslateTimer = null;
 let lastInterimTranslation = '';
-let _lastAddedText = '';
-let _lastAddedAt = 0;
+// Last segment added per source, for the 3 s exact-repeat guard (a shared slot dropped the better meeting copy).
+const _lastAdded = { mic: { text: '', at: 0 }, meeting: { text: '', at: 0 } };
 
 // ==================== PARAGRAPH TRANSCRIPT STATE ====================
 let _currentParaGroup = null;

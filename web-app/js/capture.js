@@ -608,7 +608,8 @@ function transcribeSystemAudioChunk(blob, startSeconds, { audioSeconds = SYSTEM_
             // Last live fallback (spec §2.2): Groq is resting/offline/failing → transcribe on this computer.
             // Skip it when Stop already queued the audio, the meeting changed, or the worker is backed up.
             if (!pcm || !localWhisperFallbackEnabled() || gen !== _recordingGen || chunk.queued
-                || localWhisperBacklog() >= LOCAL_WHISPER_MAX_BACKLOG) throw e;
+                || localWhisperBacklog() >= LOCAL_WHISPER_MAX_BACKLOG
+                || (appState === 'stopping' && !localWhisperReady())) throw e;   // no ~80 MB download for a chunk Stop queues anyway
             console.warn('[Groq Whisper] unavailable, using Local Whisper:', e.message);
             noteLocalFallback(gen);
             return transcribeLocalPcm(pcm, sourceLang);

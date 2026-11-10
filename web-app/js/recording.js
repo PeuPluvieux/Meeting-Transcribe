@@ -133,14 +133,15 @@ function addTranscriptSegment(text, source = 'mic', { startSeconds } = {}) {
     // Deduplication: skip if same text (modulo trailing punctuation) was just added within 3s.
     // Catches: flush fires then final arrives with slight punctuation difference.
     const now = Date.now();
-    if (_normalizeForDedup(text) === _normalizeForDedup(_lastAddedText) && now - _lastAddedAt < 3000) return;
-    _lastAddedText = text.trim();
-    _lastAddedAt = now;
+    const _slot = _lastAdded[source] || (_lastAdded[source] = { text: '', at: 0 });
+    if (_normalizeForDedup(text) === _normalizeForDedup(_slot.text) && now - _slot.at < 3000) return;
+    _slot.text = text.trim();
+    _slot.at = now;
     const elapsed = Number.isFinite(startSeconds) ? startSeconds : getElapsedSeconds();
     const { seg, displayText } = buildSegment(text, source, elapsed, currentSegmentId++);
     // Echo dedupe: a mic line whose words the meeting audio already delivered is the speakers' echo.
     if (source === 'mic' && MTLib.isEcho(seg, meetingData.transcript)) {
-        // The segment id is consumed and _lastAddedText updated on purpose (harmless gaps; the 3 s exact-repeat guard still applies).
+        // The segment id is consumed and the mic _lastAdded slot updated on purpose (harmless gaps; the per-source 3 s exact-repeat guard still applies).
         clearInterimDisplay();
         noteEchoRemoved(1);
         return;
@@ -516,7 +517,7 @@ async function _startRecordingImpl() {
         meetingData = { transcript: [], bookmarks: [], fullTranscript: '', summary: '', keyPoints: [], keyDecisions: [], actionItems: [], actionItemsChecked: [], nextSteps: [], citations: null,
             cleanPass: null, cleanTranscript: null, liveTranscript: null, transcriptView: 'live', summarySource: null };
         currentSegmentId = 0; currentMeetingId = null;
-        _lastAddedText = ''; _lastAddedAt = 0;
+        for (const k in _lastAdded) _lastAdded[k] = { text: '', at: 0 };
         editHistory = [];   // undo must not reach into the previous meeting
     }
     // Reset display mode to both so translation is always visible when recording starts
